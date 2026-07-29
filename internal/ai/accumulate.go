@@ -226,6 +226,22 @@ func AccumulateBlock(blocks *[]model.ContentBlock, event StreamEvent) {
 		*blocks = append(*blocks, model.ContentBlock{Type: "warning", Text: event.Content, Reason: event.Reason})
 	case "error":
 		*blocks = append(*blocks, model.ContentBlock{Type: "warning", Text: event.Error, Reason: event.Reason})
+	case "retry":
+		// Keep a single retry status block and update attempt counters in place.
+		if idx, found := findLastBlockOfType("retry"); found {
+			(*blocks)[idx].Text = event.Content
+			(*blocks)[idx].Reason = event.Reason
+			(*blocks)[idx].Attempt = event.Attempt
+			(*blocks)[idx].MaxAttempts = event.MaxAttempts
+		} else {
+			*blocks = append(*blocks, model.ContentBlock{
+				Type:        "retry",
+				Text:        event.Content,
+				Reason:      event.Reason,
+				Attempt:     event.Attempt,
+				MaxAttempts: event.MaxAttempts,
+			})
+		}
 	}
 }
 

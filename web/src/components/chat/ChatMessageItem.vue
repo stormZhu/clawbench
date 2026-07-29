@@ -35,7 +35,8 @@
         @render-flush="$emit('render-flush')"
         @toggle-summary="$emit('toggle-summary', msg.id)"
         @resume-session="$emit('resume-session', $event)"
-
+        @show-rag-detail="$emit('show-rag-detail', $event)"
+        @retry="$emit('retry', msg)"
       />
     </div>
 
@@ -54,7 +55,7 @@
     </button>
 
     <!-- Cancelled marker: shown after file changes banner, hidden when last block is thinking (shown inline in thinking-header instead) -->
-    <div v-if="msg.cancelled && !isLastBlockThinking" class="chat-cancelled-mark">{{ t('chat.contentBlocks.cancelled') }}</div>
+    <div v-if="msg.cancelled && !isLastBlockThinking" class="chat-cancelled-mark">{{ cancelledLabel }}</div>
 
     <!-- Bottom bar for assistant messages -->
     <div v-if="msg.role === 'assistant' && !msg.streaming && (msgText || msg.blocks?.length)" class="chat-meta-bar">
@@ -134,7 +135,7 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'task-card-click', 'send-message', 'render-flush', 'toggle-summary', 'resume-session', 'remove-pending', 'fork-from-message'])
+defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'task-card-click', 'send-message', 'render-flush', 'toggle-summary', 'resume-session', 'show-rag-detail', 'remove-pending', 'fork-from-message', 'retry'])
 
 const autoSpeech = inject('autoSpeech')
 const wrapperRef = ref(null)
@@ -174,6 +175,17 @@ const isLastBlockThinking = computed(() => {
   const blocks = props.msg?.blocks
   if (!blocks || blocks.length === 0) return false
   return blocks[blocks.length - 1].type === 'thinking'
+})
+
+/** Cancelled with zero model output — make the empty bubble self-explanatory. */
+const cancelledLabel = computed(() => {
+  const blocks = props.msg?.blocks || []
+  const hasOutput = blocks.some((b) => {
+    const t = b?.type || ''
+    return t === 'text' || t === 'thinking' || t === 'tool_use' || t === 'tool_result'
+  })
+  if (!hasOutput) return t('chat.contentBlocks.cancelledEmpty')
+  return t('chat.contentBlocks.cancelled')
 })
 
 const fileChangesDrawer = useTabDrawer('chat')

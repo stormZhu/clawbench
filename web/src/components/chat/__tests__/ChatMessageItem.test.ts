@@ -84,7 +84,7 @@ const i18n = createI18n({
           speaking: '正在朗读',
           viewDetails: '详情',
         },
-        contentBlocks: { cancelled: '已中断' },
+        contentBlocks: { cancelled: '已中断', cancelledEmpty: '已中断（未收到任何回复）' },
         pending: { queuing: '排队中' },
         fileChanges: { title: '文件变更' },
         speech: { summarizing: '总结中' },
@@ -209,6 +209,14 @@ describe('ChatMessageItem', () => {
         msg: { id: 'c1', role: 'assistant', content: '', blocks: [{ type: 'text', text: 'Hello' }], cancelled: true },
       })
       expect(wrapper.find('.chat-cancelled-mark').exists()).toBe(true)
+      expect(wrapper.find('.chat-cancelled-mark').text()).toBe('已中断')
+    })
+
+    it('shows empty-cancel label when cancelled with no model output', () => {
+      const wrapper = createWrapper({
+        msg: { id: 'c1-empty', role: 'assistant', content: '', blocks: [], cancelled: true },
+      })
+      expect(wrapper.find('.chat-cancelled-mark').text()).toBe('已中断（未收到任何回复）')
     })
 
     it('hides cancelled mark when last block is thinking', () => {

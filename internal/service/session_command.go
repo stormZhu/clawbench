@@ -574,7 +574,7 @@ func executeStreamRunShared(ctx context.Context, cfg LaunchConfig) streamRunResu
 	}
 
 	if sessionTransport == transportACPStdio {
-		if _, ok := backend.(*ai.ACPBackend); !ok {
+		if !ai.IsACPBackend(backend) {
 			_ = UpdateSessionTransport(cfg.SessionID, "")
 		}
 	}

@@ -9,6 +9,11 @@ import { resolveFilePath, fileOpenButtonHtml } from '@/composables/useFilePathAn
 import { localhostOpenButtonHtml, parseLocalhostUrl } from '@/composables/useLocalhostAnnotation.ts'
 import { useAppMode } from '@/composables/useAppMode.ts'
 import { appLog } from '@/utils/appLog'
+import {
+  getPermissionApprovalResultKind,
+  permissionApprovalResultI18nKey,
+  permissionOptionToResultKind,
+} from '@/utils/contentBlocks.ts'
 
 const TAG = 'renderToolDetail'
 import { gt } from '@/composables/useLocale'
@@ -642,16 +647,29 @@ function renderPermissionApproval(input: ToolInput, blockCtx?: ToolBlockCtx): st
   }
 
   // Option buttons / result
-  if (hasRealResult) {
-    // Already responded — show result badge instead of buttons
-    if (isApproved) {
-      html += `<div class="permission-result permission-result-approved">${escapeHtml(gt('tool.permission.approved'))}</div>`
+  if (hasRealResult || isAutoApproved) {
+    // Settled — show specific outcome (once / session / remember / reject / auto)
+    const resultKind = getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: !!isDone,
+      status: blockCtx?.status,
+      output: blockCtx?.output,
+      input: input as Record<string, unknown>,
+    })
+    const i18nKey = permissionApprovalResultI18nKey(resultKind) || (
+      isAutoApproved ? 'tool.permission.autoApproved'
+        : isApproved ? 'tool.permission.approved'
+          : 'tool.permission.denied'
+    )
+    let resultClass = 'permission-result'
+    if (resultKind === 'auto_approved' || isAutoApproved && !hasRealResult) {
+      resultClass += ' permission-result-auto-approved'
+    } else if (resultKind === 'denied' || resultKind === 'reject_once' || resultKind === 'reject_always' || (!isApproved && hasRealResult)) {
+      resultClass += ' permission-result-denied'
     } else {
-      html += `<div class="permission-result permission-result-denied">${escapeHtml(gt('tool.permission.denied'))}</div>`
+      resultClass += ' permission-result-approved'
     }
-  } else if (isAutoApproved) {
-    // Auto-approved but SSE result not yet arrived — show auto-approved badge
-    html += `<div class="permission-result permission-result-auto-approved">${escapeHtml(gt('tool.permission.autoApproved'))}</div>`
+    html += `<div class="${resultClass}">${escapeHtml(gt(i18nKey))}</div>`
   } else if (options.length > 0) {
     html += '<div class="permission-options">'
     for (let i = 0; i < options.length; i++) {
@@ -1714,12 +1732,13 @@ registerToolActionHandler('PermissionApproval', (event, _emit) => {
       }
     }
 
-    // Show feedback
-    if (cancelled) {
-      btn.textContent = gt('tool.permission.denied')
-    } else {
-      btn.textContent = gt('tool.permission.approved')
-    }
+    // Show specific feedback (once / session / remember / reject) immediately
+    const optLabel = (btn.textContent || '').trim()
+    const resultKind = permissionOptionToResultKind(kind, optLabel, optionId)
+    const i18nKey = permissionApprovalResultI18nKey(resultKind) || (
+      cancelled ? 'tool.permission.denied' : 'tool.permission.approved'
+    )
+    btn.textContent = gt(i18nKey)
 
     // Call the API
     respondPermission(sessionId, toolCallId, optionId, cancelled)

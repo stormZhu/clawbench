@@ -28,6 +28,7 @@
       @toggle-summary="handleToggleSummary"
       @resume-session="handleResumeSession"
       @fork-from-message="handleForkFromMessage"
+      @retry="handleRetryMessage"
     />
 
     <!-- Session switching overlay — placed here to cover the entire message area -->
@@ -171,6 +172,7 @@ import { useToast } from '@/composables/useToast.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { useNotification } from '@/composables/useNotification.ts'
 import { applySummaryUpdate } from '@/utils/chatSessionUtils.ts'
+import { extractPlainText } from '@/utils/userMsgIndexUtils.ts'
 import { useFileUpload } from '@/composables/useFileUpload.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
 import { buildQuoteMessage } from '@/utils/quoteQuestionUtils.ts'
@@ -818,6 +820,65 @@ async function handleToolSendMessage(text) {
     } else {
       await sendMessage(text)
     }
+}
+
+/**
+ * Retry a failed AI turn: re-send the user message immediately preceding the
+ * failed assistant message. Backend-agnostic — uses the normal chat send path
+ * so ACP / CLI / any backend gets a fresh prompt with the same text + files.
+ */
+async function handleRetryMessage(failedMsg) {
+  if (!failedMsg || loading.value) return
+
+  const list = messages.value
+  const failedIdx = list.findIndex((m) => m === failedMsg || (m.id && failedMsg.id && m.id === failedMsg.id))
+  if (failedIdx < 0) {
+    appLog.w('ChatPanel', 'retry: failed assistant message not found in list')
+    return
+  }
+
+  // Walk backward for the nearest non-pending user message.
+  let userMsg = null
+  for (let i = failedIdx - 1; i >= 0; i--) {
+    if (list[i].role === 'user' && !list[i].pending) {
+      userMsg = list[i]
+      break
+    }
+  }
+  if (!userMsg) {
+    toast.show(t('toast.sendFailed'), { icon: '⚠️', type: 'error' })
+    appLog.w('ChatPanel', 'retry: no preceding user message to resend')
+    return
+  }
+
+  // Prefer structured blocks text; fall back to content (may be block JSON).
+  let text = ''
+  if (Array.isArray(userMsg.blocks) && userMsg.blocks.length > 0) {
+    text = userMsg.blocks
+      .filter((b) => b.type === 'text' && b.text)
+      .map((b) => b.text)
+      .join('\n')
+  }
+  if (!text) {
+    text = extractPlainText(userMsg.content || '')
+  }
+
+  const files = Array.isArray(userMsg.files) ? userMsg.files : []
+  const filePaths = files.map((f) => (typeof f === 'string' ? f : f.path)).filter(Boolean)
+
+  if (!text && filePaths.length === 0) {
+    toast.show(t('toast.sendFailed'), { icon: '⚠️', type: 'error' })
+    appLog.w('ChatPanel', 'retry: preceding user message has no text or files')
+    return
+  }
+
+  appLog.i('ChatPanel', 'retry: resending preceding user message', {
+    failedMsgId: failedMsg.id,
+    userMsgId: userMsg.id,
+    textLen: text.length,
+    fileCount: filePaths.length,
+  })
+  await sendMessageNow(text, filePaths, files)
 }
 
 function scrollBottom(force = false) {

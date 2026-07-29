@@ -18,11 +18,18 @@
           <component :is="getToolIcon(block.name).icon" :size="12" class="tool-icon" />
           <span class="tool-name">{{ toolDisplayName(block.name, block.input, block.display_name) }}</span>
           <span v-if="toolCallSummary(block)" class="tool-summary">{{ toolCallSummary(block) }}</span>
+          <span
+            v-if="shouldShowPermissionResultBadge(block, bi)"
+            class="permission-bar-result"
+            :class="'is-' + permissionResultKind(block)"
+          >{{ permissionResultLabel(block) }}</span>
           <span v-if="!block.done" class="tool-spinner"></span>
           <XCircle v-else-if="block.status === 'error'" :size="14" color="#ef4444" class="tool-error-icon" />
           <CheckCircle2 v-else :size="14" color="#22c55e" class="tool-check" />
+          <ChevronUp v-if="isCollapsiblePermission(block) && isAutoExpandDetailVisible(block, bi)" :size="12" class="tool-chevron" />
+          <ChevronDown v-else-if="isCollapsiblePermission(block)" :size="12" class="tool-chevron" />
         </div>
-        <div class="tool-detail" :data-tool-name="block.name" :data-session-id="sessionId" :data-tool-call-id="block.id" @click="handleToolDetailClick">
+        <div v-if="isAutoExpandDetailVisible(block, bi)" class="tool-detail" :data-tool-name="block.name" :data-session-id="sessionId" :data-tool-call-id="block.id" @click="handleToolDetailClick">
           <div v-html="formatToolInput(block.input, block.name, { done: block.done, status: block.status, output: block.output })"></div>
         </div>
       </template>
@@ -88,10 +95,14 @@
           'thinking-expanding': !!expandingThinking[stableBlockKey(bi, block)],
         }"
       >
+        <!-- Toggle only on header: content may contain file-path / commit-hash links that must
+             remain clickable without collapsing the card (and without stopPropagation swallowing
+             the delegated open-file handler on the message list). -->
         <div class="thinking-header" @click.stop="handleThinkingClick(block, bi)">
           <Brain :size="12" class="thinking-icon" />
           <span class="thinking-label">{{ t('chat.message.deepThinking') }}</span>
-          <!-- Status indicators: right-aligned, same pattern as tool_use -->
+          <!-- In-progress status: spinner + label so users know thinking is still running -->
+          <span v-if="isThinkingStreaming(block)" class="thinking-status">{{ t('chat.message.thinkingInProgress') }}</span>
           <span v-if="isThinkingStreaming(block)" class="thinking-spinner"></span>
           <!-- Cancelled marker: show inline in thinking header when this is the last block and message was cancelled.
                Prevents the cancelled mark from being visually hidden/trapped under the collapsed thinking chip. -->
@@ -99,7 +110,9 @@
           <ChevronUp v-else-if="isThinkingExpandedDone(block, bi) || expandingThinking[stableBlockKey(bi, block)]" :size="12" class="thinking-chevron" />
           <ChevronDown v-else :size="12" class="thinking-chevron" />
         </div>
-        <!-- Content wrapper: CSS grid 0fr/1fr transition for smooth expand/collapse -->
+        <!-- Content wrapper: CSS grid 0fr/1fr transition for smooth expand/collapse.
+             UX: expanded while thinking streams; auto-collapses when the message ends;
+             user re-expands via header to read the full completed reasoning. -->
         <div class="thinking-content-wrapper"
           :class="{
             'thinking-content-open': isThinkingStreaming(block) || isThinkingExpandedDone(block, bi) || !!expandingThinking[stableBlockKey(bi, block)],
@@ -114,32 +127,70 @@
           <component :is="getToolIcon(block.name).icon" :size="12" class="tool-icon" />
           <span class="tool-name">{{ toolDisplayName(block.name, block.input, block.display_name) }}</span>
           <span v-if="toolCallSummary(block)" class="tool-summary">{{ toolCallSummary(block) }}</span>
+          <!-- Collapsed PermissionApproval: keep outcome visible without opening the long detail card -->
+          <span
+            v-if="shouldShowPermissionResultBadge(block, bi)"
+            class="permission-bar-result"
+            :class="'is-' + permissionResultKind(block)"
+          >{{ permissionResultLabel(block) }}</span>
           <!-- Loading: spinner -->
           <span v-if="!block.done" class="tool-spinner"></span>
           <!-- Done with error: red X -->
           <XCircle v-else-if="block.status === 'error'" :size="14" color="#ef4444" class="tool-error-icon" />
           <!-- Done (success or unknown): green check -->
           <CheckCircle2 v-else :size="14" color="#22c55e" class="tool-check" />
+          <!-- Settled PermissionApproval can collapse; chevron indicates state -->
+          <ChevronUp v-if="isCollapsiblePermission(block) && isAutoExpandDetailVisible(block, bi)" :size="12" class="tool-chevron" />
+          <ChevronDown v-else-if="isCollapsiblePermission(block)" :size="12" class="tool-chevron" />
         </div>
-        <!-- Inline detail for auto-expand tools (AskUserQuestion, PermissionApproval) -->
-        <div v-if="shouldAutoExpand(block)" class="tool-detail" :data-tool-name="block.name" :data-session-id="sessionId" :data-tool-call-id="block.id" @click="handleToolDetailClick">
+        <!-- Inline detail for auto-expand tools (AskUserQuestion always; PermissionApproval when pending or expanded) -->
+        <div v-if="shouldAutoExpand(block) && isAutoExpandDetailVisible(block, bi)" class="tool-detail" :data-tool-name="block.name" :data-session-id="sessionId" :data-tool-call-id="block.id" @click="handleToolDetailClick">
           <div v-html="formatToolInput(block.input, block.name, { done: block.done, status: block.status, output: block.output })"></div>
         </div>
       </template>
+      <!-- Auto-retry status (in-progress attempt indicator) -->
+      <div v-else-if="block.type === 'retry'" class="chat-retry-card" :class="{ 'is-done': isRetryDone(block) }">
+        <span v-if="!isRetryDone(block)" class="retry-spinner" aria-hidden="true"></span>
+        <div class="retry-body">
+          <div class="retry-title-row">
+            <span class="retry-badge">{{ t('chat.contentBlocks.autoRetryBadge') }}</span>
+            <span class="retry-title">{{ getRetryTitle(block) }}</span>
+          </div>
+          <div v-if="getRetryDetail(block)" class="retry-detail">{{ getRetryDetail(block) }}</div>
+        </div>
+      </div>
       <!-- Error block -->
       <div v-else-if="block.type === 'error'" class="chat-error-card">
         <AlertTriangle :size="14" class="error-icon" />
         <span class="error-text">{{ getWarningText(block) }}</span>
+        <button
+          v-if="showRetry(block)"
+          type="button"
+          class="error-retry-btn"
+          @click.stop="emit('retry')"
+        >{{ t('chat.contentBlocks.retry') }}</button>
       </div>
       <!-- Warning block: severe (disconnect/timeout/restart) renders as error-level red -->
       <div v-else-if="block.type === 'warning' && isSevereWarning(block)" class="chat-error-card">
         <AlertTriangle :size="14" class="error-icon" />
         <span class="error-text">{{ getWarningText(block) }}</span>
+        <button
+          v-if="showRetry(block)"
+          type="button"
+          class="error-retry-btn"
+          @click.stop="emit('retry')"
+        >{{ t('chat.contentBlocks.retry') }}</button>
       </div>
-      <!-- Warning block: normal (parse errors, stderr) renders as amber -->
+      <!-- Warning block: normal (parse errors, stderr, request_failed) renders as amber -->
       <div v-else-if="block.type === 'warning'" class="chat-warning-card">
         <AlertCircle :size="14" class="warning-icon" />
         <span class="warning-text">{{ getWarningText(block) }}</span>
+        <button
+          v-if="showRetry(block)"
+          type="button"
+          class="error-retry-btn error-retry-btn--warn"
+          @click.stop="emit('retry')"
+        >{{ t('chat.contentBlocks.retry') }}</button>
       </div>
       <!-- Scheduled task card(s) — simplified: click navigates to Tasks tab -->
       <template v-else-if="block.type === 'text' && hasScheduledTasks(bi)">
@@ -198,29 +249,52 @@
       <div v-else-if="block.type === 'text'" v-html="getBlockHtml(bi, block)"></div>
     </template>
     </template>
-    <!-- Loading dots while AI is still streaming (not when cancelled, and not when showing summary) -->
-    <div v-if="streaming && !cancelled && !(showingSummary && summary)" class="placeholder-dots"><span></span><span></span><span></span></div>
+    <!-- Empty-stream waiting status: show elapsed time so long hangs aren't silent -->
+    <div v-if="showWaitingStatus" class="chat-waiting-card" role="status" aria-live="polite">
+      <span class="waiting-spinner" aria-hidden="true"></span>
+      <div class="waiting-body">
+        <div class="waiting-title">{{ t('chat.contentBlocks.waitingForResponse') }}</div>
+        <div class="waiting-elapsed">{{ waitingElapsedText }}</div>
+        <div v-if="waitSeconds >= 30" class="waiting-hint">{{ t('chat.contentBlocks.waitingSlowHint') }}</div>
+      </div>
+    </div>
+    <!-- Loading dots while AI is still streaming with content (not when cancelled/summary) -->
+    <div
+      v-else-if="streaming && !cancelled && !(showingSummary && summary)"
+      class="placeholder-dots"
+    ><span></span><span></span><span></span></div>
 
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onUnmounted, computed, onMounted } from 'vue'
+import { ref, watch, onUnmounted, computed, onMounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { handleToolAction, shouldAutoExpandTool } from '@/utils/renderToolDetail.ts'
 import { getToolIcon, toolDisplayName } from '@/utils/icons'
-import { Brain, ChevronRight, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, XCircle, Clock, Archive } from 'lucide-vue-next'
+import { Brain, ChevronRight, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, XCircle, CheckCircle2, Clock, Archive } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
-import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
+import { renderMarkdown, renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
 import { useThinkingContent } from '@/composables/useThinkingContent.ts'
+import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
+import { useCommitHashAnnotation } from '@/composables/useCommitHashAnnotation.ts'
 import {
   isSevereWarning,
+  isRetriableWarning,
   getWarningText as getWarningTextUtil,
+  getRetryTitle as getRetryTitleUtil,
+  getRetryDetail as getRetryDetailUtil,
+  shouldShowWaitingStatus as shouldShowWaitingStatusUtil,
+  formatWaitElapsed as formatWaitElapsedUtil,
   statusClass as statusClassUtil,
   statusLabel as statusLabelUtil,
   statusLabelSimple as statusLabelSimpleUtil,
   formatTime as formatTimeUtil,
   askQuestionSummary as askQuestionSummaryUtil,
+  isPermissionApprovalSettled,
+  shouldShowAutoExpandToolDetail,
+  getPermissionApprovalResultKind,
+  permissionApprovalResultI18nKey,
   blockKey,
   blockTaskKey as blockTaskKeyUtil,
   buildTaskKeyIndex,
@@ -271,6 +345,18 @@ async function fetchToolCallInputForAutoExpand(block, msgId) {
 
 // Re-export utility functions with i18n context bound
 function getWarningText(block) { return getWarningTextUtil(block, t) }
+function getRetryTitle(block) { return getRetryTitleUtil(block, t) }
+function getRetryDetail(block) { return getRetryDetailUtil(block, t) }
+/** Retry is only offered when the stream has finished (not mid-generation). */
+function showRetry(block) {
+  return !props.streaming && isRetriableWarning(block)
+}
+
+/** Spinner only while auto-retry is still in flight. */
+function isRetryDone(block) {
+  return !!block.done || !props.streaming || !!props.cancelled
+}
+
 function statusClass(task) { return statusClassUtil(task) }
 function statusLabel(task) { return statusLabelUtil(task, t) }
 function statusLabelSimple(task) { return statusLabelSimpleUtil(task, t) }
@@ -281,9 +367,33 @@ function shouldAutoExpand(block) {
   return shouldAutoExpandTool(block.name || '')
 }
 
-/** Handle tool call bar click: open overlay for regular tools, toggle inline for AskUserQuestion. */
+/** Settled PermissionApproval cards can collapse; pending ones stay forced-open. */
+function isCollapsiblePermission(block) {
+  return isPermissionApprovalSettled(block)
+}
+
+/** Auto-expand detail visibility: pending PermissionApproval / AskUserQuestion always open; settled PermissionApproval uses expandedTools. */
+function isAutoExpandDetailVisible(block, bi) {
+  return shouldShowAutoExpandToolDetail(block, !!props.expandedTools[key(bi)])
+}
+
+function permissionResultKind(block) {
+  return getPermissionApprovalResultKind(block)
+}
+
+function permissionResultLabel(block) {
+  const key = permissionApprovalResultI18nKey(getPermissionApprovalResultKind(block))
+  return key ? t(key) : ''
+}
+
+/** Show compact outcome badge on the tool bar only while the detail card is collapsed. */
+function shouldShowPermissionResultBadge(block, bi) {
+  return !!getPermissionApprovalResultKind(block) && !isAutoExpandDetailVisible(block, bi)
+}
+
+/** Handle tool call bar click: open overlay for regular tools, toggle inline for auto-expand tools. */
 function handleToolClick(block, blockKeyStr, blockIdx) {
-  // AskUserQuestion stays inline — toggle expand state
+  // Auto-expand tools stay inline — toggle expand state (pending PermissionApproval still emits; detail stays open until settled)
   if (shouldAutoExpand(block)) {
     emit('toggle-tool', blockKeyStr)
     return
@@ -330,7 +440,49 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'task-card-click', 'send-message', 'render-flush', 'resume-session'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'task-card-click', 'send-message', 'render-flush', 'resume-session', 'show-rag-detail', 'retry'])
+
+/** Empty stream: show explicit waiting card with elapsed time. */
+const waitSeconds = ref(0)
+let waitTimer = null
+const showWaitingStatus = computed(() =>
+  shouldShowWaitingStatusUtil(props.streaming, props.cancelled, props.blocks)
+)
+const waitingElapsedText = computed(() => formatWaitElapsedUtil(waitSeconds.value, t))
+
+function clearWaitTimer() {
+  if (waitTimer != null) {
+    clearInterval(waitTimer)
+    waitTimer = null
+  }
+}
+
+function syncWaitTimer() {
+  clearWaitTimer()
+  if (!showWaitingStatus.value) {
+    waitSeconds.value = 0
+    return
+  }
+  // Keep counting while empty-stream waiting is visible.
+  waitTimer = setInterval(() => {
+    waitSeconds.value += 1
+  }, 1000)
+}
+
+watch(showWaitingStatus, (show, wasShow) => {
+  if (show && !wasShow) {
+    waitSeconds.value = 0
+    syncWaitTimer()
+  } else if (!show) {
+    clearWaitTimer()
+    // Keep last elapsed only while retry card takes over; reset when fully done.
+    if (!props.streaming || props.cancelled) waitSeconds.value = 0
+  }
+}, { immediate: true })
+
+onUnmounted(() => {
+  clearWaitTimer()
+})
 
 // Key helper: use msgId if available, otherwise msgIndex
 function key(bi) {
@@ -379,10 +531,13 @@ function stableBlockKey(bi, block) {
   return `${block.type || 'other'}-${bi}`
 }
 
+const { verifyFilePaths } = useFilePathAnnotation()
+const { verifyCommitHashes } = useCommitHashAnnotation()
+
 function handleThinkingClick(block, bi) {
   const blockKey = stableBlockKey(bi, block)
   if (isThinkingCollapsed(block, bi)) {
-    // Expand inline with animation
+    // Expand inline with animation — drop throttle cache so complete text re-renders fully
     expandingThinking.value[blockKey] = true
     thinkingExpanded.value[blockKey] = true
     blockHtmlCache.value = {}
@@ -406,6 +561,31 @@ function handleThinkingClick(block, bi) {
       triggerThinkingCollapse(blockKey)
     }
   }
+}
+
+/** Full thinking render (post-stream / done / history): enhancements + path/commit verify. */
+function renderThinkingComplete(text) {
+  const { html, detectedPaths, detectedSHAs } = renderMarkdown(text || '', { skipEnhancements: false })
+  if (detectedPaths.length > 0) {
+    const uniquePaths = [...new Set(detectedPaths)]
+    nextTick(() => {
+      const el = document.getElementById('aiChatMessages')
+      if (el) verifyFilePaths(uniquePaths, el)
+    })
+  }
+  if (detectedSHAs.length > 0) {
+    const uniqueSHAs = [...new Set(detectedSHAs)]
+    nextTick(() => {
+      const el = document.getElementById('aiChatMessages')
+      if (el) verifyCommitHashes(uniqueSHAs, el)
+    })
+  }
+  return html
+}
+
+/** Whether thinking is still live-streaming deltas (show spinner + lightweight markdown). */
+function isThinkingLiveStreaming(block) {
+  return props.streaming && props.active && !block.done
 }
 
 /** Whether a thinking block should show inline streaming content.
@@ -508,8 +688,14 @@ function flushBlockHtml() {
       // streaming=true: deferred rendering — pure markdown only
       newCache[key] = props.renderTextBlock(block.text, props.msgId, i, true)
     } else if (block.type === 'thinking') {
-      // Thinking blocks use renderMarkdownHtml during streaming
-      newCache[`t-${key}`] = renderMarkdownHtml(block.text)
+      // Live thinking: lightweight; done thinking: full complete render
+      const text = block.text || ''
+      if (block.done || !props.streaming) {
+        newCache[`t-${key}`] = renderThinkingComplete(text)
+      } else {
+        newCache[`t-${key}`] = renderMarkdownHtml(text, { skipEnhancements: true })
+      }
+      newCache[`t-${key}:len`] = text.length
     }
   }
   blockHtmlCache.value = newCache
@@ -571,7 +757,7 @@ function getThinkingHtml(bi, block) {
   }
   if (block.think_id) {
     const text = thinkingContent.cachedText(block.think_id)
-    if (text) return renderMarkdownHtml(text)
+    if (text) return renderThinkingComplete(text)
     if (thinkingContent.errors.value[block.think_id]) {
       return `<div class="thinking-load-error"><span>${t('chat.contentBlocks.thinkingLoadFailed')}</span><button class="thinking-retry-btn" onclick="this.closest('.chat-thinking').querySelector('.thinking-header').click()">${t('chat.contentBlocks.retry')}</button></div>`
     }
@@ -580,26 +766,36 @@ function getThinkingHtml(bi, block) {
   return ''
 }
 
-/** Existing throttled streaming/inline render path (unchanged behavior). */
+/** Render complete thinking from the latest text; live deltas use a length-aware lightweight cache. */
 function getThinkingTextHtml(text, bi, block) {
-  if (!props.streaming || !props.active) {
-    return renderMarkdownHtml(text)
+  if (!isThinkingLiveStreaming(block)) {
+    return renderThinkingComplete(text)
   }
+
+  // Live streaming: lightweight markdown + length-aware cache
   const cacheKey = `t-${stableBlockKey(bi, block)}`
-  // Streaming: deferred rendering with throttling (same pattern as text blocks)
-  if (blockHtmlCache.value[cacheKey] !== undefined) {
-    if (!_throttleTimer) {
-      const newCache = { ...blockHtmlCache.value }
-      newCache[cacheKey] = renderMarkdownHtml(text)
-      blockHtmlCache.value = newCache
-      _throttleTimer = setTimeout(flushBlockHtml, THROTTLE_MS)
-    } else {
-      _throttlePending = true
-    }
-    return blockHtmlCache.value[cacheKey]
+  const lenKey = `${cacheKey}:len`
+  const cached = blockHtmlCache.value[cacheKey]
+  const cachedLen = blockHtmlCache.value[lenKey]
+
+  // Text unchanged — reuse cache
+  if (cached !== undefined && cachedLen === text.length) {
+    return cached
   }
-  const html = renderMarkdownHtml(text)
-  blockHtmlCache.value = { ...blockHtmlCache.value, [cacheKey]: html }
+
+  // Text grew (or first paint): render latest immediately so UI never lags on a
+  // partial snapshot when the shared throttle timer is busy with text blocks.
+  const html = renderMarkdownHtml(text, { skipEnhancements: true })
+  blockHtmlCache.value = {
+    ...blockHtmlCache.value,
+    [cacheKey]: html,
+    [lenKey]: text.length,
+  }
+  if (!_throttleTimer) {
+    _throttleTimer = setTimeout(flushBlockHtml, THROTTLE_MS)
+  } else {
+    _throttlePending = true
+  }
   return html
 }
 
@@ -719,7 +915,7 @@ onUnmounted(() => {
 
 .chat-error-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 6px 10px;
   margin: 2px 0;
@@ -729,13 +925,18 @@ onUnmounted(() => {
 
 .chat-error-card .error-icon {
   flex-shrink: 0;
+  margin-top: 1px;
   color: #ef4444;
 }
 
 .chat-error-card .error-text {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   font-weight: 500;
   color: #dc2626;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 :root[data-theme="dark"] .chat-error-card {
@@ -753,7 +954,7 @@ onUnmounted(() => {
 
 .chat-warning-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   padding: 6px 10px;
   margin: 2px 0;
@@ -763,10 +964,13 @@ onUnmounted(() => {
 
 .chat-warning-card .warning-icon {
   flex-shrink: 0;
+  margin-top: 1px;
   color: #f59e0b;
 }
 
 .chat-warning-card .warning-text {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   font-weight: 500;
   color: #d97706;
@@ -787,6 +991,183 @@ onUnmounted(() => {
   color: #fcd34d;
 }
 
+
+.chat-retry-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: #1d4ed8;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-retry-card .retry-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chat-retry-card .retry-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.chat-retry-card .retry-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(59, 130, 246, 0.16);
+  color: #1d4ed8;
+}
+.chat-retry-card .retry-title {
+  font-weight: 600;
+}
+.chat-retry-card .retry-detail {
+  font-size: 12px;
+  opacity: 0.92;
+  color: #1e3a8a;
+}
+.chat-retry-card .retry-spinner {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 2px solid rgba(59, 130, 246, 0.25);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: chat-retry-spin 0.8s linear infinite;
+}
+.chat-retry-card.is-done {
+  opacity: 0.85;
+}
+@keyframes chat-retry-spin {
+  to { transform: rotate(360deg); }
+}
+:root[data-theme="dark"] .chat-retry-card {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(96, 165, 250, 0.3);
+  color: #93c5fd;
+}
+:root[data-theme="dark"] .chat-retry-card .retry-badge {
+  background: rgba(96, 165, 250, 0.2);
+  color: #bfdbfe;
+}
+:root[data-theme="dark"] .chat-retry-card .retry-detail {
+  color: #bfdbfe;
+}
+
+.chat-waiting-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(100, 116, 139, 0.08);
+  border: 1px solid rgba(100, 116, 139, 0.22);
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.chat-waiting-card .waiting-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-waiting-card .waiting-title {
+  font-weight: 600;
+}
+.chat-waiting-card .waiting-elapsed {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.chat-waiting-card .waiting-hint {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #b45309;
+}
+.chat-waiting-card .waiting-spinner {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 2px solid rgba(100, 116, 139, 0.25);
+  border-top-color: #64748b;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: chat-retry-spin 0.8s linear infinite;
+}
+:root[data-theme="dark"] .chat-waiting-card {
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.28);
+  color: #e2e8f0;
+}
+:root[data-theme="dark"] .chat-waiting-card .waiting-hint {
+  color: #fbbf24;
+}
+
+.error-retry-btn {
+  flex-shrink: 0;
+  align-self: center;
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.error-retry-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.error-retry-btn--warn {
+  color: #d97706;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.error-retry-btn--warn:hover {
+  background: rgba(245, 158, 11, 0.22);
+}
+
+:root[data-theme="dark"] .error-retry-btn {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.15);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+:root[data-theme="dark"] .error-retry-btn:hover {
+  background: rgba(248, 113, 113, 0.25);
+}
+
+:root[data-theme="dark"] .error-retry-btn--warn {
+  color: #fcd34d;
+  background: rgba(251, 191, 36, 0.15);
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+:root[data-theme="dark"] .error-retry-btn--warn:hover {
+  background: rgba(251, 191, 36, 0.25);
+}
+
 /* Thinking block — callout style distinct from tool calls */
 .chat-thinking {
   --thinking-accent: #8b5cf6;
@@ -803,7 +1184,7 @@ onUnmounted(() => {
   --thinking-accent: #a78bfa;
 }
 
-/* Collapsed state: pill-shaped clickable chip */
+/* Collapsed state: pill-shaped clickable chip (header is the hit target) */
 .chat-thinking.thinking-collapsed {
   border-radius: 12px;
   border-left: none;
@@ -820,7 +1201,7 @@ onUnmounted(() => {
   border-color: color-mix(in srgb, var(--thinking-accent) 35%, var(--border-color));
 }
 
-/* Expanded-done state: callout style, header is clickable to collapse */
+/* Expanded-done state: callout style; only header collapses so content links stay usable */
 .chat-thinking.thinking-expanded-done .thinking-header {
   cursor: pointer;
 }
@@ -858,21 +1239,30 @@ onUnmounted(() => {
   grid-template-rows: 0fr;
   opacity: 0;
   transition: grid-template-rows var(--thinking-transition), opacity 200ms ease, padding 200ms ease;
+  /* Avoid clipping during open-state height growth as content re-renders */
+  overflow: hidden;
 }
 
 .thinking-content-wrapper.thinking-content-open {
   grid-template-rows: 1fr;
   opacity: 1;
-  padding: 0 10px 3px;
+  padding: 0 10px 8px;
+  overflow: visible;
 }
 
 .thinking-inline-content {
-  overflow: hidden;
+  overflow: hidden; /* required for 0fr collapse; open parent uses overflow:visible */
   min-height: 0;
   font-size: 12px;
   line-height: 1.65;
   color: var(--text-secondary);
   word-break: break-word;
+}
+
+.thinking-content-wrapper.thinking-content-open .thinking-inline-content {
+  /* Once open, do not clip completed thinking content (lists, code, etc.) */
+  overflow: visible;
+  min-height: auto;
 }
 
 .thinking-header {
@@ -894,6 +1284,13 @@ onUnmounted(() => {
   color: var(--thinking-accent);
   font-size: 11px;
   letter-spacing: 0.02em;
+}
+
+.thinking-status {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+  margin-left: 2px;
+  flex-shrink: 0;
 }
 
 .thinking-spinner {
@@ -1040,6 +1437,65 @@ onUnmounted(() => {
 .chat-tool-call .tool-check {
   flex-shrink: 0;
   margin-left: auto;
+}
+
+.chat-tool-call .tool-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary, #888);
+  opacity: 0.8;
+}
+
+.chat-tool-call .permission-bar-result {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-tool-call .permission-bar-result.is-auto_approved {
+  color: #b45309;
+  background: rgba(234, 179, 8, 0.14);
+}
+
+.chat-tool-call .permission-bar-result.is-allow_once,
+.chat-tool-call .permission-bar-result.is-allow_session,
+.chat-tool-call .permission-bar-result.is-allow_remember,
+.chat-tool-call .permission-bar-result.is-approved {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.chat-tool-call .permission-bar-result.is-reject_once,
+.chat-tool-call .permission-bar-result.is-reject_always,
+.chat-tool-call .permission-bar-result.is-denied {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, 0.14);
+}
+
+:root[data-theme="dark"] .chat-tool-call .permission-bar-result.is-auto_approved {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.16);
+}
+
+:root[data-theme="dark"] .chat-tool-call .permission-bar-result.is-allow_once,
+:root[data-theme="dark"] .chat-tool-call .permission-bar-result.is-allow_session,
+:root[data-theme="dark"] .chat-tool-call .permission-bar-result.is-allow_remember,
+:root[data-theme="dark"] .chat-tool-call .permission-bar-result.is-approved {
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.16);
+}
+
+:root[data-theme="dark"] .chat-tool-call .permission-bar-result.is-reject_once,
+:root[data-theme="dark"] .chat-tool-call .permission-bar-result.is-reject_always,
+:root[data-theme="dark"] .chat-tool-call .permission-bar-result.is-denied {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.16);
 }
 
 .chat-tool-call .tool-warn {

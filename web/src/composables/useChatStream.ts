@@ -366,6 +366,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         if (existing) {
           if (data.name) existing.name = data.name
           if (data.status !== undefined) existing.status = data.status
+          if (data.output !== undefined && data.output !== '') existing.output = data.output
           existing.done = true
           if (data.duration_ms !== undefined) existing.duration_ms = data.duration_ms
         }
@@ -497,6 +498,49 @@ export function useChatStream(options: UseChatStreamOptions) {
         const warningBlock: ContentBlock = { type: 'warning', text: warningData.text }
         if (warningData.reason) warningBlock.reason = warningData.reason
         sm.blocks!.push(warningBlock)
+        if (isOpen.value) {
+          onRenderNeeded()
+        }
+        break
+      }
+
+      case 'retry': {
+        if (sessionChanged()) return
+        const sm = findStreamingMsg(messages.value)
+        if (!sm) return
+        resetStreamTimeout()
+        const retryData = payload as {
+          text?: string
+          reason?: string
+          attempt?: number
+          maxAttempts?: number
+        }
+        if (sm.streamingText) {
+          sm.blocks!.push({ type: 'text', text: sm.streamingText as string })
+          sm.streamingText = ''
+        }
+        if (!sm.blocks) sm.blocks = []
+        const attempt = Number(retryData?.attempt) || 0
+        const maxAttempts = Number(retryData?.maxAttempts) || 0
+        const reason = retryData?.reason || 'retrying'
+        const text = retryData?.text || ''
+        // Update the existing retry card in place so attempt counters don't stack.
+        const existing = findLastBlockOfType(sm.blocks, 'retry')
+        if (existing) {
+          existing.text = text
+          existing.reason = reason
+          existing.attempt = attempt
+          existing.maxAttempts = maxAttempts
+        } else {
+          sm.blocks.push({
+            type: 'retry',
+            text,
+            reason,
+            attempt,
+            maxAttempts,
+          })
+        }
+        // Keep loading true — auto-retry is still in progress.
         if (isOpen.value) {
           onRenderNeeded()
         }

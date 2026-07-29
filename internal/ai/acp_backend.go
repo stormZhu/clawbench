@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	acp "github.com/coder/acp-go-sdk"
-
 	"clawbench/internal/model"
 )
 

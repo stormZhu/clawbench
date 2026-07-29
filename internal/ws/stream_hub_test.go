@@ -267,6 +267,33 @@ func TestStreamEventToPayload_WarningNoReason(t *testing.T) {
 
 // --- acpStatePayload ---
 
+func TestStreamEventToPayload_Retry(t *testing.T) {
+	payload := StreamEventToPayload(ai.StreamEvent{
+		Type:        "retry",
+		Content:     "rate limited",
+		Reason:      ai.ReasonRetrying,
+		Attempt:     2,
+		MaxAttempts: 3,
+	})
+	m, ok := payload.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map payload, got %T", payload)
+	}
+	if m["attempt"] != 2 {
+		t.Errorf("attempt = %v, want 2", m["attempt"])
+	}
+	if m["maxAttempts"] != 3 {
+		t.Errorf("maxAttempts = %v, want 3", m["maxAttempts"])
+	}
+	if m["text"] != "rate limited" {
+		t.Errorf("text = %v", m["text"])
+	}
+	if m["reason"] != ai.ReasonRetrying {
+		t.Errorf("reason = %v", m["reason"])
+	}
+}
+
+
 func TestStreamEventToPayload_ModeUpdate(t *testing.T) {
 	mode := &ai.ModeState{CurrentModeID: "code"}
 	payload := StreamEventToPayload(ai.StreamEvent{Type: "mode_update", Mode: mode})
@@ -438,7 +465,7 @@ func TestStreamEventToPayload_ToolResult(t *testing.T) {
 	payload := StreamEventToPayload(ai.StreamEvent{
 		Type:     "tool_result",
 		ToolMeta: &meta,
-		Tool:     &ai.ToolCall{ID: "t1", Name: "Read", Status: "success"},
+		Tool:     &ai.ToolCall{ID: "t1", Name: "Read", Status: "success", Output: "approved|allow_once|Allow Once"},
 	})
 	m, ok := payload.(map[string]any)
 	assert.True(t, ok)
@@ -446,6 +473,7 @@ func TestStreamEventToPayload_ToolResult(t *testing.T) {
 	assert.Equal(t, "Read", m["name"])
 	assert.Equal(t, "success", m["status"])
 	assert.Equal(t, "file read done", m["summary"])
+	assert.Equal(t, "approved|allow_once|Allow Once", m["output"])
 }
 
 func TestStreamEventToPayload_ToolResultMinimal(t *testing.T) {

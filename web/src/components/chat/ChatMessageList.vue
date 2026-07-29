@@ -72,9 +72,10 @@
       @render-flush="emit('render-flush')"
       @toggle-summary="$emit('toggle-summary', $event)"
       @resume-session="$emit('resume-session', $event)"
-
+      @show-rag-detail="$emit('show-rag-detail', $event)"
       @remove-pending="$emit('remove-pending', $event)"
       @fork-from-message="$emit('fork-from-message', $event)"
+      @retry="$emit('retry', $event)"
     />
     </div>
   </div>
@@ -166,7 +167,7 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'file-open', 'load-more', 'task-card-click', 'send-message', 'remove-pending', 'render-flush', 'toggle-summary', 'resume-session', 'fork-from-message'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'file-open', 'load-more', 'task-card-click', 'send-message', 'remove-pending', 'render-flush', 'toggle-summary', 'resume-session', 'show-rag-detail', 'fork-from-message', 'retry'])
 
 const messagesRef = ref(null)
 const { handleDblClick } = useDoubleClickCopy()

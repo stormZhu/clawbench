@@ -1,12 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import {
   isSevereWarning,
+  isRetriableWarning,
+  getRetryText,
+  getRetryTitle,
+  getRetryDetail,
   getWarningText,
+  unwrapAcpErrorDetail,
+  humanizeStreamErrorDetail,
+  shouldShowWaitingStatus,
+  hasStreamingProgress,
+  formatWaitElapsed,
   statusClass,
   statusLabel,
   statusLabelSimple,
   formatTime,
   askQuestionSummary,
+  isPermissionApprovalTool,
+  isPermissionApprovalSettled,
+  shouldShowAutoExpandToolDetail,
+  getPermissionApprovalResultKind,
+  permissionOptionToResultKind,
+  permissionApprovalResultI18nKey,
+  parsePermissionDecisionOutput,
   blockKey,
   blockTaskKey,
   buildTaskKeyIndex,
@@ -44,6 +60,28 @@ describe('isSevereWarning', () => {
   })
 })
 
+// ── isRetriableWarning ──
+describe('isRetriableWarning', () => {
+  it('returns true for request_failed', () => {
+    expect(isRetriableWarning({ reason: 'request_failed' })).toBe(true)
+  })
+  it('returns true for empty / panic / timeout / backend_exit', () => {
+    expect(isRetriableWarning({ reason: 'empty' })).toBe(true)
+    expect(isRetriableWarning({ reason: 'panic' })).toBe(true)
+    expect(isRetriableWarning({ reason: 'timeout' })).toBe(true)
+    expect(isRetriableWarning({ reason: 'backend_exit' })).toBe(true)
+  })
+  it('returns false for user_cancel', () => {
+    expect(isRetriableWarning({ reason: 'user_cancel' })).toBe(false)
+  })
+  it('returns true for bare error blocks without reason', () => {
+    expect(isRetriableWarning({ type: 'error' })).toBe(true)
+  })
+  it('returns false for bare warning without reason', () => {
+    expect(isRetriableWarning({ type: 'warning' })).toBe(false)
+  })
+})
+
 // ── getWarningText ──
 describe('getWarningText', () => {
   const t = (key: string) => key // Identity function — returns key as-is
@@ -77,6 +115,38 @@ describe('getWarningText', () => {
     expect(getWarningText({ reason: 'parse_error', text: 'nocolon' }, tFound)).toBe('Parse error')
   })
 
+  it('appends request_failed detail after colon', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.request_failed' ? 'AI request failed' : key
+    expect(getWarningText({
+      reason: 'request_failed',
+      text: 'acp: prompt: session/prompt: rate limited',
+    }, tFound)).toBe('AI request failed: acp: prompt: session/prompt: rate limited')
+  })
+
+  it('appends multi-line request_failed detail with newline', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.request_failed' ? 'AI request failed' : key
+    expect(getWarningText({
+      reason: 'request_failed',
+      text: 'acp: prompt: error\nstack line',
+    }, tFound)).toBe('AI request failed\nacp: prompt: error\nstack line')
+  })
+
+  it('unwraps ACP JSON-RPC data for request_failed', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.request_failed' ? 'AI request failed' : key
+    const text = 'acp: prompt: acp: prompt: {"code":-32603,"message":"Internal error","data":"Unauthorized (401) invalid credentials\\n\\n  Model:     grok-4.5"}'
+    const got = getWarningText({ reason: 'request_failed', text }, tFound)
+    expect(got.startsWith('AI request failed')).toBe(true)
+    expect(got).toContain('Unauthorized (401) invalid credentials')
+    expect(got).toContain('Model:     grok-4.5')
+    expect(got).not.toContain('"code":-32603')
+    expect(got).not.toContain('Internal error')
+  })
+
+  it('does not append generic English request_failed text', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.request_failed' ? 'AI request failed' : key
+    expect(getWarningText({ reason: 'request_failed', text: 'AI request failed' }, tFound)).toBe('AI request failed')
+  })
+
   it('returns empty string when no reason and no text', () => {
     expect(getWarningText({}, t)).toBe('')
   })
@@ -93,6 +163,25 @@ describe('getWarningText', () => {
   it('returns translated text for request_failed without text', () => {
     const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.request_failed' ? 'AI request failed' : key
     expect(getWarningText({ reason: 'request_failed' }, tFound)).toBe('AI request failed')
+  })
+})
+
+// ── unwrapAcpErrorDetail ──
+describe('unwrapAcpErrorDetail', () => {
+  it('extracts string data from JSON-RPC error', () => {
+    expect(unwrapAcpErrorDetail(
+      'acp: prompt: {"code":-32603,"message":"Internal error","data":"boom"}'
+    )).toBe('boom')
+  })
+
+  it('extracts map data.error', () => {
+    expect(unwrapAcpErrorDetail(
+      '{"code":-32603,"message":"Internal error","data":{"error":"broken pipe"}}'
+    )).toBe('broken pipe')
+  })
+
+  it('collapses double acp prompt prefix', () => {
+    expect(unwrapAcpErrorDetail('acp: prompt: acp: prompt: plain fail')).toBe('acp: prompt: plain fail')
   })
 })
 
@@ -400,5 +489,325 @@ describe('extractSlashCommand', () => {
 
   it('returns null for empty string', () => {
     expect(extractSlashCommand('')).toBeNull()
+  })
+})
+
+
+describe('getRetryText', () => {
+  const t = (key: string, params?: Record<string, unknown>) => {
+    if (key === 'chat.contentBlocks.retryingAttempt') return `Retrying (${params?.n}/${params?.max})…`
+    if (key === 'chat.contentBlocks.retryingAttemptOnly') return `Retrying (#${params?.n})…`
+    if (key === 'chat.contentBlocks.retrying') return 'Retrying…'
+    if (key === 'chat.contentBlocks.errorHints.networkGrok') {
+      return 'Cannot reach Grok API (network/proxy). Check connectivity and retry.'
+    }
+    if (key === 'chat.contentBlocks.errorHints.networkGeneric') {
+      return 'Network request failed. Check connectivity and retry.'
+    }
+    if (key === 'chat.contentBlocks.waitingElapsedSec') return `Waited ${params?.n}s`
+    if (key === 'chat.contentBlocks.waitingElapsedMinSec') return `Waited ${params?.m}m ${params?.s}s`
+    return key
+  }
+
+  it('formats attempt with max', () => {
+    expect(getRetryText({ attempt: 2, maxAttempts: 3 }, t)).toBe('Retrying (2/3)…')
+    expect(getRetryTitle({ attempt: 2, maxAttempts: 3 }, t)).toBe('Retrying (2/3)…')
+  })
+
+  it('appends detail after colon', () => {
+    expect(getRetryText({ attempt: 1, maxAttempts: 3, text: 'rate limited' }, t))
+      .toBe('Retrying (1/3)…: rate limited')
+    expect(getRetryDetail({ text: 'rate limited' }, t)).toBe('rate limited')
+  })
+
+  it('humanizes grok network failures in retry detail', () => {
+    const detail = getRetryDetail({
+      text: 'acp: prompt: reqwest error stream: error sending request for url (https://cli-chat-proxy.grok.com/v1/responses)',
+    }, t)
+    expect(detail).toContain('Cannot reach Grok API')
+    expect(detail).toContain('cli-chat-proxy.grok.com')
+  })
+
+  it('handles missing attempt numbers', () => {
+    expect(getRetryText({}, t)).toBe('Retrying…')
+  })
+})
+
+describe('shouldShowWaitingStatus', () => {
+  it('shows for empty streaming message', () => {
+    expect(shouldShowWaitingStatus(true, false, [])).toBe(true)
+  })
+
+  it('hides when content/tools present', () => {
+    expect(hasStreamingProgress([{ type: 'text' }])).toBe(true)
+    expect(shouldShowWaitingStatus(true, false, [{ type: 'text', text: 'hi' } as any])).toBe(false)
+  })
+
+  it('hides when retry card present', () => {
+    expect(shouldShowWaitingStatus(true, false, [{ type: 'retry' }])).toBe(false)
+  })
+
+  it('hides when cancelled or not streaming', () => {
+    expect(shouldShowWaitingStatus(true, true, [])).toBe(false)
+    expect(shouldShowWaitingStatus(false, false, [])).toBe(false)
+  })
+})
+
+describe('formatWaitElapsed', () => {
+  const t = (key: string, params?: Record<string, unknown>) => {
+    if (key === 'chat.contentBlocks.waitingElapsedSec') return `Waited ${params?.n}s`
+    if (key === 'chat.contentBlocks.waitingElapsedMinSec') return `Waited ${params?.m}m ${params?.s}s`
+    return key
+  }
+  it('formats seconds and minutes', () => {
+    expect(formatWaitElapsed(12, t)).toBe('Waited 12s')
+    expect(formatWaitElapsed(75, t)).toBe('Waited 1m 15s')
+  })
+})
+
+describe('humanizeStreamErrorDetail', () => {
+  const t = (key: string) => {
+    if (key === 'chat.contentBlocks.errorHints.networkGrok') return 'Grok network down'
+    if (key === 'chat.contentBlocks.errorHints.networkGeneric') return 'Network down'
+    return key
+  }
+  it('maps grok proxy errors', () => {
+    const detail = humanizeStreamErrorDetail(
+      'reqwest error stream: error sending request for url (https://cli-chat-proxy.grok.com/v1/responses)',
+      t,
+    )
+    expect(detail).toContain('Grok network down')
+    expect(detail).toContain('cli-chat-proxy.grok.com')
+  })
+  it('maps generic timeout', () => {
+    const detail = humanizeStreamErrorDetail('connection timed out', t)
+    expect(detail).toContain('Network down')
+    expect(detail).toContain('connection timed out')
+  })
+  it('keeps unknown details', () => {
+    expect(humanizeStreamErrorDetail('something else failed', t)).toBe('something else failed')
+  })
+})
+
+
+// ── PermissionApproval collapse helpers ──
+describe('isPermissionApprovalTool', () => {
+  it('matches PermissionApproval case-insensitively', () => {
+    expect(isPermissionApprovalTool('PermissionApproval')).toBe(true)
+    expect(isPermissionApprovalTool('permissionapproval')).toBe(true)
+    expect(isPermissionApprovalTool('Bash')).toBe(false)
+    expect(isPermissionApprovalTool('')).toBe(false)
+  })
+})
+
+describe('isPermissionApprovalSettled', () => {
+  it('is settled when autoApproved', () => {
+    expect(isPermissionApprovalSettled({
+      name: 'PermissionApproval',
+      done: false,
+      input: { autoApproved: true },
+    })).toBe(true)
+  })
+
+  it('is settled when done with output', () => {
+    expect(isPermissionApprovalSettled({
+      name: 'PermissionApproval',
+      done: true,
+      output: 'Approved',
+      input: {},
+    })).toBe(true)
+  })
+
+  it('is pending when done without output (cleanup false-positive)', () => {
+    expect(isPermissionApprovalSettled({
+      name: 'PermissionApproval',
+      done: true,
+      input: { options: [] },
+    })).toBe(false)
+  })
+
+  it('is pending while waiting for user action', () => {
+    expect(isPermissionApprovalSettled({
+      name: 'PermissionApproval',
+      done: false,
+      input: { toolName: 'Bash' },
+    })).toBe(false)
+  })
+
+  it('returns false for non-permission tools', () => {
+    expect(isPermissionApprovalSettled({
+      name: 'AskUserQuestion',
+      done: true,
+      output: 'x',
+    })).toBe(false)
+  })
+})
+
+describe('shouldShowAutoExpandToolDetail', () => {
+  it('always shows AskUserQuestion detail', () => {
+    expect(shouldShowAutoExpandToolDetail({ name: 'AskUserQuestion', done: true }, false)).toBe(true)
+    expect(shouldShowAutoExpandToolDetail({ name: 'AskUserQuestion', done: true }, true)).toBe(true)
+  })
+
+  it('always shows pending PermissionApproval detail', () => {
+    expect(shouldShowAutoExpandToolDetail({
+      name: 'PermissionApproval',
+      done: false,
+      input: { toolName: 'Bash' },
+    }, false)).toBe(true)
+  })
+
+  it('hides settled PermissionApproval unless expanded', () => {
+    const settled = {
+      name: 'PermissionApproval',
+      done: true,
+      output: 'Auto-Approved',
+      input: { autoApproved: true },
+    }
+    expect(shouldShowAutoExpandToolDetail(settled, false)).toBe(false)
+    expect(shouldShowAutoExpandToolDetail(settled, true)).toBe(true)
+  })
+})
+
+describe('parsePermissionDecisionOutput', () => {
+  it('parses structured decision|kind|optionId|label', () => {
+    expect(parsePermissionDecisionOutput('approved|allow_once|allow_once|Allow Once')).toEqual({
+      decision: 'approved',
+      kind: 'allow_once',
+      optionId: 'allow_once',
+      label: 'Allow Once',
+    })
+  })
+
+  it('parses legacy 3-part decision|kind|label', () => {
+    expect(parsePermissionDecisionOutput('approved|allow_once|Allow Once')).toEqual({
+      decision: 'approved',
+      kind: 'allow_once',
+      optionId: '',
+      label: 'Allow Once',
+    })
+  })
+
+  it('parses legacy plain values', () => {
+    expect(parsePermissionDecisionOutput('Auto-Approved')?.decision).toBe('auto_approved')
+    expect(parsePermissionDecisionOutput('Approved')?.decision).toBe('approved')
+    expect(parsePermissionDecisionOutput('Cancelled')?.decision).toBe('cancelled')
+  })
+})
+
+describe('getPermissionApprovalResultKind', () => {
+  it('returns auto_approved when autoApproved is set', () => {
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'success',
+      output: 'auto_approved|allow_once|Allow once',
+      input: { autoApproved: true },
+    })).toBe('auto_approved')
+  })
+
+  it('distinguishes allow_once / allow_session / allow_remember', () => {
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'success',
+      output: 'approved|allow_once|allow_once|Allow Once',
+      input: {},
+    })).toBe('allow_once')
+
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'success',
+      output: 'approved|allow_always|allow_always|Allow for Session',
+      input: {},
+    })).toBe('allow_session')
+
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'success',
+      output: 'approved|allow_always|accept_execpolicy_amendment|Allow and Remember Command Pattern',
+      input: {},
+    })).toBe('allow_remember')
+
+    // Codex dynamic label for exec-policy amendment (no "remember" word)
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'success',
+      output: 'approved|allow_always|accept_execpolicy_amendment|Allow Commands Starting With `./build.sh`',
+      input: {},
+    })).toBe('allow_remember')
+
+    // Legacy 3-part with dynamic label still classifies as remember
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'success',
+      output: 'approved|allow_always|Allow Commands Starting With `./build.sh`',
+      input: {},
+    })).toBe('allow_remember')
+  })
+
+  it('returns reject kinds for cancelled decisions', () => {
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'error',
+      output: 'cancelled|reject_once|reject_once|Reject',
+      input: {},
+    })).toBe('reject_once')
+  })
+
+  it('returns approved for legacy manual success result', () => {
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'success',
+      output: 'Approved',
+      input: {},
+    })).toBe('approved')
+  })
+
+  it('returns denied for legacy cancelled result', () => {
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: true,
+      status: 'error',
+      output: 'Cancelled',
+      input: {},
+    })).toBe('denied')
+  })
+
+  it('returns null while pending', () => {
+    expect(getPermissionApprovalResultKind({
+      name: 'PermissionApproval',
+      done: false,
+      input: { toolName: 'Bash' },
+    })).toBeNull()
+  })
+})
+
+describe('permissionApprovalResultI18nKey', () => {
+  it('maps kinds to i18n keys', () => {
+    expect(permissionApprovalResultI18nKey('allow_once')).toBe('tool.permission.approvedOnce')
+    expect(permissionApprovalResultI18nKey('allow_session')).toBe('tool.permission.approvedSession')
+    expect(permissionApprovalResultI18nKey('allow_remember')).toBe('tool.permission.approvedRemember')
+    expect(permissionApprovalResultI18nKey('reject_always')).toBe('tool.permission.deniedAlways')
+  })
+})
+
+describe('permissionOptionToResultKind', () => {
+  it('maps option kind, label, and optionId', () => {
+    expect(permissionOptionToResultKind('allow_once', 'Allow Once', 'allow_once')).toBe('allow_once')
+    expect(permissionOptionToResultKind('allow_always', 'Allow for Session', 'allow_always')).toBe('allow_session')
+    expect(permissionOptionToResultKind('allow_always', 'Allow and Remember Command Pattern', 'accept_execpolicy_amendment')).toBe('allow_remember')
+    expect(permissionOptionToResultKind(
+      'allow_always',
+      'Allow Commands Starting With `./build.sh`',
+      'accept_execpolicy_amendment',
+    )).toBe('allow_remember')
+    expect(permissionOptionToResultKind('reject_once', 'Reject', 'reject_once')).toBe('reject_once')
   })
 })

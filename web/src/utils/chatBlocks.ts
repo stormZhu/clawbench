@@ -91,6 +91,30 @@ export function toolCallSummary(block: { input?: Record<string, unknown>; name?:
     if (header) return header
     return question
   }
+  if (name === 'permissionapproval') {
+    const toolName = typeof block.input.toolName === 'string' ? block.input.toolName.trim() : ''
+    let detail = ''
+    const rawInput = block.input.toolInput
+    if (typeof rawInput === 'string' && rawInput) {
+      try {
+        const parsed = JSON.parse(rawInput) as Record<string, unknown>
+        if (typeof parsed.command === 'string' && parsed.command) {
+          detail = parsed.command
+        } else if (typeof parsed.file_path === 'string' && parsed.file_path) {
+          detail = baseName(parsed.file_path)
+        } else if (typeof parsed.path === 'string' && parsed.path) {
+          detail = baseName(parsed.path)
+        } else {
+          detail = rawInput
+        }
+      } catch {
+        detail = rawInput
+      }
+    }
+    const combined = toolName && detail ? `${toolName}: ${detail}` : (toolName || detail)
+    // One-line bar summary; CSS ellipsis handles visual truncation.
+    return combined.replace(/\s+/g, ' ').trim()
+  }
   if (block.input.description) return block.input.description as string
   const obj = block.input
   if (obj.file_path) return baseName(obj.file_path as string)

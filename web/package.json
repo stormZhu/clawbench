@@ -27,5 +27,8 @@
     "redoc": "^2.5.3",
     "vite": "^6.0.0",
     "vue-draggable-plus": "^0.6.1"
+  },
+  "overrides": {
+    "marked": "^18.0.0"
   }
 }
