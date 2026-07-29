@@ -842,7 +842,7 @@ func TestRequestPermission_AutoApprove(t *testing.T) {
 			}
 			if evt.Type == "tool_result" {
 				toolResultFound = true
-				assert.Equal(t, "Auto-Approved", evt.Tool.Output)
+				assert.Equal(t, FormatPermissionDecisionOutput("auto_approved", "allow_once", "allow_once", "Allow once"), evt.Tool.Output)
 			}
 		case <-time.After(time.Second):
 			t.Fatal("timed out waiting for SSE event")

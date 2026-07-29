@@ -3,12 +3,12 @@ import { getAgentSvg } from '@/utils/agentIcons'
 
 const ALL_BACKENDS = [
     'claude', 'codebuddy', 'opencode', 'codex', 'cline',
-    'copilot', 'qoder', 'kimi', 'mimo', 'pi', 'deepseek', 'vecli',
+    'copilot', 'qoder', 'kimi', 'mimo', 'pi', 'deepseek', 'vecli', 'grok',
 ]
 
 describe('agentIcons', () => {
     describe('getAgentSvg', () => {
-        it('returns SVG data for all 12 backends', () => {
+        it('returns SVG data for all 13 backends', () => {
             for (const id of ALL_BACKENDS) {
                 const data = getAgentSvg(id)
                 expect(data, `backend "${id}" should have SVG data`).not.toBeNull()
@@ -33,7 +33,7 @@ describe('agentIcons', () => {
         })
 
         it('backends needing background have needsBg flag', () => {
-            const needsBg = ['opencode', 'codex', 'mimo', 'pi']
+            const needsBg = ['opencode', 'codex', 'mimo', 'pi', 'grok']
             for (const id of needsBg) {
                 expect(getAgentSvg(id)!.needsBg, `backend "${id}" should have needsBg=true`).toBe(true)
             }

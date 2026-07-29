@@ -61,7 +61,7 @@ func NewBackend(backendType string) (AIBackend, error) {
 		if entry.NeedsAutoResume {
 			backend = &AutoResumeBackend{inner: backend}
 		}
-		return backend, nil
+		return WithRequestRetry(backend), nil
 	}
 
 	// All backends have been migrated to the plugin registry.
@@ -98,7 +98,7 @@ func NewBackendForAgentWithTransport(backendType, agentID, transportOverride str
 					if err != nil {
 						return nil, fmt.Errorf("acp backend for agent %q: %w", agentID, err)
 					}
-					return acpBackend, nil
+					return WithRequestRetry(acpBackend), nil
 				}
 				// transport override says acp-stdio but agent doesn't support it;
 				// fall through to CLI backend instead of erroring out.
@@ -109,4 +109,32 @@ func NewBackendForAgentWithTransport(backendType, agentID, transportOverride str
 
 	// Fall back to CLI backend (with AutoResumeBackend for ExitPlanMode agents)
 	return NewBackend(backendType)
+}
+
+
+// backendUnwrapper is implemented by decorator backends that wrap another AIBackend.
+type backendUnwrapper interface {
+	Unwrap() AIBackend
+}
+
+// UnwrapBackend peels decorator wrappers (retry / auto-resume) until the concrete backend.
+func UnwrapBackend(backend AIBackend) AIBackend {
+	for backend != nil {
+		u, ok := backend.(backendUnwrapper)
+		if !ok {
+			break
+		}
+		inner := u.Unwrap()
+		if inner == nil || inner == backend {
+			break
+		}
+		backend = inner
+	}
+	return backend
+}
+
+// IsACPBackend reports whether backend (possibly wrapped) is an ACPBackend.
+func IsACPBackend(backend AIBackend) bool {
+	_, ok := UnwrapBackend(backend).(*ACPBackend)
+	return ok
 }

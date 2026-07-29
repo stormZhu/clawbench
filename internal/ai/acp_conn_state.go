@@ -51,17 +51,30 @@ func (c *ACPConn) CacheNewSessionState() {
 	c.applyExtractedState(ext)
 }
 
-// MergeResumedSessionState merges state from a ResumeSessionResponse, preserving
-// the user's current selections (re-applied by ensureAliveWithSession) while
-// updating available options lists from the resumed agent via the registry.
+// MergeResumedSessionState merges state from a successful session recovery.
+// It accepts either a ResumeSessionResponse or a LoadSessionResponse (the load
+// path is normalized into the resume shape). User selections that were
+// re-applied by ensureAliveWithSession are preserved; available option lists
+// come from the recovered agent response via the registry.
 func (c *ACPConn) MergeResumedSessionState() {
 	resumeResp := c.GetAndClearResumeSessionResp()
 	if resumeResp == nil {
-		slog.Warn("acp: MergeResumedSessionState called with nil resumeResp")
+		// LoadSession recovery stores its response separately; adapt it so the
+		// existing extract/apply path can reuse the ResumeSession shape.
+		if loadResp := c.GetAndClearLoadSessionResp(); loadResp != nil {
+			resumeResp = &acp.ResumeSessionResponse{
+				Meta:          loadResp.Meta,
+				Modes:         loadResp.Modes,
+				ConfigOptions: loadResp.ConfigOptions,
+			}
+		}
+	}
+	if resumeResp == nil {
+		slog.Warn("acp: MergeResumedSessionState called with nil resume/load response")
 		return
 	}
 	slog.Info(
-		"acp: merging resumed session state",
+		"acp: merging recovered session state",
 		"has_modes", resumeResp.Modes != nil,
 		"config_options_count", len(resumeResp.ConfigOptions),
 	)
@@ -288,6 +301,27 @@ func IsACPResourceNotFound(err error) bool {
 	return strings.Contains(reqErr.Error(), "Resource not found")
 }
 
+// isACPMethodNotFound reports whether err is (or wraps) a JSON-RPC
+// method-not-found response (code -32601 / "Method not found").
+// Used to detect agents that do not implement session/resume so recovery can
+// fall back to session/load without treating the peer as dead.
+func isACPMethodNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var reqErr *acp.RequestError
+	if errors.As(err, &reqErr) {
+		if reqErr.Code == -32601 {
+			return true
+		}
+		if strings.Contains(reqErr.Message, "Method not found") {
+			return true
+		}
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Method not found") || strings.Contains(msg, `"code":-32601`)
+}
+
 // buildPromptBlocks constructs ACP ContentBlock list from the chat request.
 // If a system prompt should be injected, it's prepended as the first text block.
 func (b *ACPBackend) buildPromptBlocks(req ChatRequest) []acp.ContentBlock {
@@ -303,5 +337,39 @@ func (b *ACPBackend) buildPromptBlocks(req ChatRequest) []acp.ContentBlock {
 		prompt = fmt.Sprintf("[System Instructions: %s]\n\n%s", req.SystemPrompt, prompt)
 	}
 
-	return []acp.ContentBlock{acp.TextBlock(prompt)}
+	return []acp.ContentBlock{acpTextBlock(prompt)}
+}
+
+// acpTextBlock builds a text content block with an explicit empty annotations
+// object for defensive typing.
+//
+// NOTE: coder/acp-go-sdk v0.13.5 ContentBlock.MarshalJSON only emits type/text
+// and strips annotations on the wire. The real outbound fix is acpStdinFilter
+// (see acp_stdin_filter.go), which re-injects "annotations":{} into JSON-RPC
+// lines before they reach the agent. Keep Annotations set here so intent is
+// obvious if/when the SDK preserves the field.
+func acpTextBlock(text string) acp.ContentBlock {
+	return acp.ContentBlock{Text: &acp.ContentBlockText{
+		Type:        "text",
+		Text:        text,
+		Annotations: &acp.Annotations{},
+	}}
+}
+
+// isACPAnnotationsSerializationError reports the Grok/agent bug where a prompt
+// fails after model work with:
+//
+//	serialization error: missing field `annotations`
+//
+// This is deterministic for a corrupted live session; rotating to a fresh
+// session/new is the practical recovery.
+func isACPAnnotationsSerializationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	detail := strings.ToLower(formatACPUserError(err))
+	if detail == "" {
+		detail = strings.ToLower(err.Error())
+	}
+	return strings.Contains(detail, "serialization error") && strings.Contains(detail, "annotations")
 }

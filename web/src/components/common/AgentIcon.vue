@@ -58,7 +58,7 @@ const initialStyle = computed(() => ({
 }
 
 /* Contrasting background for icons with dark/light fills that would be
-   invisible on same-colored backgrounds (opencode, codex, mimo, pi) */
+   invisible on same-colored backgrounds (opencode, codex, mimo, pi, grok) */
 .agent-icon-bg {
     border-radius: 20%;
     background: var(--bg-tertiary);
