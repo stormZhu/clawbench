@@ -34,11 +34,48 @@ done
 
 cd "$ROOT_DIR"
 
+# Resolve JDK 17+ (macOS + Linux). Prefer env JAVA_HOME when valid.
+resolve_java_home() {
+  if [ -n "${JAVA_HOME:-}" ] && [ -x "${JAVA_HOME}/bin/java" ]; then
+    echo "$JAVA_HOME"
+    return 0
+  fi
+  if [ -x /usr/libexec/java_home ]; then
+    /usr/libexec/java_home -v 17 2>/dev/null && return 0
+    /usr/libexec/java_home 2>/dev/null && return 0
+  fi
+  local d
+  for d in \
+    /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
+    /opt/homebrew/opt/openjdk@17 \
+    /usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
+    /usr/local/opt/openjdk@17 \
+    /usr/lib/jvm/java-17-openjdk-amd64 \
+    /usr/lib/jvm/java-17-openjdk \
+    /usr/lib/jvm/jdk-17.0.12 \
+    /usr/lib/jvm/temurin-17
+  do
+    if [ -x "$d/bin/java" ]; then
+      echo "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Step 1: Run tests with coverage (if not skipped)
 if [ "$SKIP_TEST" = false ]; then
   echo "==> Running Android tests with coverage..."
+  if ! ANDROID_JAVA_HOME=$(resolve_java_home); then
+    echo "ERROR: JDK 17+ not found. Install Java and re-run."
+    echo "  macOS:  brew install openjdk@17"
+    echo "  Linux:  sudo apt install openjdk-17-jdk"
+    echo "  Or set: export JAVA_HOME=/path/to/jdk-17"
+    exit 1
+  fi
+  echo "  JAVA_HOME: $ANDROID_JAVA_HOME"
   cd "$ANDROID_DIR"
-  JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64} ./gradlew jacocoTestReport 2>&1
+  JAVA_HOME="$ANDROID_JAVA_HOME" ./gradlew jacocoTestReport 2>&1
   cd "$ROOT_DIR"
   echo ""
 else

@@ -19,6 +19,26 @@ def autoVersionName() {
     }
 }
 
+// Resolve release keystore once at configuration time.
+// CI provides KEYSTORE_FILE; local builds use android/clawbench.jks
+// (auto-created by build.sh / android/setup.sh when missing).
+def releaseKeystorePath = System.getenv("KEYSTORE_FILE") ?: "${rootProject.projectDir}/clawbench.jks"
+def releaseKeystoreFile = rootProject.file(releaseKeystorePath)
+// If KEYSTORE_FILE is absolute, rootProject.file still works; if relative like
+// "../clawbench.jks" from historical CI, also try from the app project dir.
+if (!releaseKeystoreFile.exists()) {
+    def alt = file(releaseKeystorePath)
+    if (alt.exists()) {
+        releaseKeystoreFile = alt
+    }
+}
+def hasReleaseKeystore = releaseKeystoreFile.exists()
+if (!hasReleaseKeystore) {
+    logger.lifecycle("Release keystore not found at ${releaseKeystoreFile}. " +
+            "Release APK will be unsigned unless you run ./build.sh --android (auto-generates a local keystore) " +
+            "or set KEYSTORE_FILE / place android/clawbench.jks.")
+}
+
 android {
     namespace 'com.clawbench.app'
     compileSdk 36
@@ -34,12 +54,12 @@ android {
 
     signingConfigs {
         release {
-            // CI: read from environment variables; Local: fallback to keystore file
-            def keystoreFile = System.getenv("KEYSTORE_FILE")
-            storeFile keystoreFile ? file(keystoreFile) : file('../clawbench.jks')
-            storePassword System.getenv("KEYSTORE_PASSWORD") ?: 'clawbench123'
-            keyAlias System.getenv("KEY_ALIAS") ?: 'clawbench'
-            keyPassword System.getenv("KEY_PASSWORD") ?: 'clawbench123'
+            if (hasReleaseKeystore) {
+                storeFile releaseKeystoreFile
+                storePassword System.getenv("KEYSTORE_PASSWORD") ?: 'clawbench123'
+                keyAlias System.getenv("KEY_ALIAS") ?: 'clawbench'
+                keyPassword System.getenv("KEY_PASSWORD") ?: 'clawbench123'
+            }
         }
     }
 
@@ -62,7 +82,11 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.release
+            // Only attach signing config when a keystore file is actually available.
+            // validateSigningRelease fails hard if storeFile points at a missing path.
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
         }
         debug {
             minifyEnabled false

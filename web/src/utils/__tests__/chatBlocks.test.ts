@@ -402,6 +402,37 @@ describe('toolCallSummary', () => {
       input: { file_path: '/main.go' },
     })).toBe('main.go')
   })
+
+  it('summarizes PermissionApproval command as Tool: command', () => {
+    expect(toolCallSummary({
+      name: 'PermissionApproval',
+      input: {
+        toolName: 'Bash',
+        toolInput: JSON.stringify({ command: 'ls -la /tmp' }),
+        autoApproved: true,
+      },
+    })).toBe('Bash: ls -la /tmp')
+  })
+
+  it('collapses whitespace in PermissionApproval command summary', () => {
+    expect(toolCallSummary({
+      name: 'PermissionApproval',
+      input: {
+        toolName: 'Bash',
+        toolInput: JSON.stringify({ command: 'echo hi\nnext line' }),
+      },
+    })).toBe('Bash: echo hi next line')
+  })
+
+  it('summarizes PermissionApproval file path', () => {
+    expect(toolCallSummary({
+      name: 'PermissionApproval',
+      input: {
+        toolName: 'Read',
+        toolInput: JSON.stringify({ file_path: '/home/user/src/main.go' }),
+      },
+    })).toBe('Read: main.go')
+  })
 })
 
 // ── hasImagesInContent ──

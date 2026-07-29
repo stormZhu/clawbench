@@ -168,6 +168,21 @@ describe('forceCleanupStreamingState', () => {
     expect(messages[0].streaming).toBeUndefined()
   })
 
+  it('marks retry blocks done so spinner stops after interrupt', () => {
+    const messages = [
+      {
+        role: 'assistant',
+        content: '',
+        blocks: [{ type: 'retry', attempt: 2, maxAttempts: 3, text: 'timeout', reason: 'retrying' }],
+        streaming: true,
+      },
+    ]
+    forceCleanupStreamingState(messages, { onRenderNeeded: vi.fn() })
+    expect(messages).toHaveLength(1)
+    expect(messages[0].streaming).toBeUndefined()
+    expect(messages[0].blocks[0].done).toBe(true)
+  })
+
   it('marks unfinished tool_use as done', () => {
     const messages = [
       {

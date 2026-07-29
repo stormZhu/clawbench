@@ -86,11 +86,87 @@ else
     echo "  (Go binary will use empty embed — serve from disk public/ if available)"
 fi
 
+# Resolve JDK 17+ for Android builds (macOS + Linux, no hardcoded distro path).
+resolve_java_home() {
+    if [ -n "${JAVA_HOME:-}" ] && [ -x "${JAVA_HOME}/bin/java" ]; then
+        echo "$JAVA_HOME"
+        return 0
+    fi
+    # macOS: prefer JDK 17 via java_home, then any installed JDK
+    if [ -x /usr/libexec/java_home ]; then
+        if jh=$(/usr/libexec/java_home -v 17 2>/dev/null); then
+            echo "$jh"
+            return 0
+        fi
+        if jh=$(/usr/libexec/java_home 2>/dev/null); then
+            echo "$jh"
+            return 0
+        fi
+    fi
+    # Common install locations (Homebrew, Linux distros, project docs)
+    local candidates=(
+        /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+        /opt/homebrew/opt/openjdk@17
+        /usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+        /usr/local/opt/openjdk@17
+        /opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home
+        /usr/local/opt/openjdk/libexec/openjdk.jdk/Contents/Home
+        /usr/lib/jvm/java-17-openjdk-amd64
+        /usr/lib/jvm/java-17-openjdk
+        /usr/lib/jvm/jdk-17.0.12
+        /usr/lib/jvm/temurin-17
+    )
+    local d
+    for d in "${candidates[@]}"; do
+        if [ -x "$d/bin/java" ]; then
+            echo "$d"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # 2. Build Android APK (optional, before Go build so APK is embedded)
 if [ -n "$BUILD_ANDROID" ]; then
     echo "[2/5] Building Android APK..."
     if [ -d "android" ] && [ -f "android/gradlew" ]; then
-        (cd android && JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew assembleRelease \
+        if ! ANDROID_JAVA_HOME=$(resolve_java_home); then
+            echo "ERROR: JDK 17+ not found. Install Java and re-run."
+            echo "  macOS:  brew install openjdk@17"
+            echo "          sudo ln -sfn \$(brew --prefix openjdk@17)/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-17.jdk"
+            echo "  Linux:  sudo apt install openjdk-17-jdk"
+            echo "  Or set: export JAVA_HOME=/path/to/jdk-17"
+            exit 1
+        fi
+        echo "  JAVA_HOME: $ANDROID_JAVA_HOME"
+        # Release APK requires a keystore. Official release keystores come from CI secrets
+        # and are gitignored; generate a local development keystore if one is missing.
+        ensure_android_keystore() {
+            local keystore_path="$1"
+            local java_home="$2"
+            if [ -f "$keystore_path" ]; then
+                return 0
+            fi
+            local keytool_bin="keytool"
+            if [ -x "$java_home/bin/keytool" ]; then
+                keytool_bin="$java_home/bin/keytool"
+            fi
+            echo "  Keystore not found: $keystore_path"
+            echo "  Generating local development keystore (not for production releases)..."
+            "$keytool_bin" -genkeypair \
+                -v \
+                -keystore "$keystore_path" \
+                -storepass clawbench123 \
+                -keypass clawbench123 \
+                -alias clawbench \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=ClawBench Dev, OU=Dev, O=ClawBench, L=Local, ST=Local, C=US"
+            echo "  Created: $keystore_path"
+        }
+        ensure_android_keystore "android/clawbench.jks" "$ANDROID_JAVA_HOME"
+        (cd android && JAVA_HOME="$ANDROID_JAVA_HOME" ./gradlew assembleRelease \
             -PversionCode=$VERSION_CODE -PversionName="$FULL_VERSION")
         echo "  APK: android/app/build/outputs/apk/release/clawbench-android.apk"
         if [ -f android/app/build/outputs/apk/release/clawbench-android.apk ]; then

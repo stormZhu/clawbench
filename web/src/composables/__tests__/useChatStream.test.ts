@@ -889,6 +889,64 @@ describe('useChatStream', () => {
     })
   })
 
+  // ── Retry event ──
+
+  describe('WS event handling — retry', () => {
+    it('should add retry block with attempt numbers and keep streaming', () => {
+      const options = createOptions()
+      const { connectStream } = useChatStream(options)
+
+      options.loading.value = true
+      connectStream('test-session-1')
+      simulateWsEvent('retry', {
+        text: 'rate limited',
+        reason: 'retrying',
+        attempt: 2,
+        maxAttempts: 3,
+      })
+
+      const assistantMsg = options.messages.value.find(
+        (m: any) => m.role === 'assistant' && m.streaming
+      )
+      const retryBlock = assistantMsg.blocks.find((b: any) => b.type === 'retry')
+      expect(retryBlock).toBeDefined()
+      expect(retryBlock.attempt).toBe(2)
+      expect(retryBlock.maxAttempts).toBe(3)
+      expect(retryBlock.text).toBe('rate limited')
+      expect(options.loading.value).toBe(true)
+    })
+
+    it('should update existing retry block in place instead of stacking', () => {
+      const options = createOptions()
+      const { connectStream } = useChatStream(options)
+
+      options.loading.value = true
+      connectStream('test-session-1')
+      simulateWsEvent('retry', {
+        text: 'rate limited',
+        reason: 'retrying',
+        attempt: 2,
+        maxAttempts: 3,
+      })
+      simulateWsEvent('retry', {
+        text: 'timeout',
+        reason: 'retrying',
+        attempt: 3,
+        maxAttempts: 3,
+      })
+
+      const assistantMsg = options.messages.value.find(
+        (m: any) => m.role === 'assistant' && m.streaming
+      )
+      const retryBlocks = assistantMsg.blocks.filter((b: any) => b.type === 'retry')
+      expect(retryBlocks).toHaveLength(1)
+      expect(retryBlocks[0].attempt).toBe(3)
+      expect(retryBlocks[0].maxAttempts).toBe(3)
+      expect(retryBlocks[0].text).toBe('timeout')
+      expect(options.loading.value).toBe(true)
+    })
+  })
+
   // ── Queue events ──
 
   describe('WS event handling — queue_drain', () => {

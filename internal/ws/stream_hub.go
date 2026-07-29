@@ -158,6 +158,8 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 		return errorPayload(event)
 	case "warning":
 		return warningPayload(event)
+	case "retry":
+		return retryPayload(event)
 	case "user_message":
 		return userMessagePayload(event)
 	case "queue_drain":
@@ -235,6 +237,11 @@ func toolResultPayload(event ai.StreamEvent) any {
 	if event.Tool.Status != "" {
 		payload["status"] = event.Tool.Status
 	}
+	// Include output so interactive tools (PermissionApproval) can show
+	// structured decision labels on the streaming path without waiting for history reload.
+	if event.Tool.Output != "" {
+		payload["output"] = event.Tool.Output
+	}
 	attachToolMeta(payload, event.ToolMeta)
 	return payload
 }
@@ -284,6 +291,20 @@ func errorPayload(event ai.StreamEvent) any {
 
 func warningPayload(event ai.StreamEvent) any {
 	payload := map[string]string{"text": event.Content}
+	if event.Reason != "" {
+		payload["reason"] = event.Reason
+	}
+	return payload
+}
+
+func retryPayload(event ai.StreamEvent) any {
+	payload := map[string]any{
+		"attempt":     event.Attempt,
+		"maxAttempts": event.MaxAttempts,
+	}
+	if event.Content != "" {
+		payload["text"] = event.Content
+	}
 	if event.Reason != "" {
 		payload["reason"] = event.Reason
 	}

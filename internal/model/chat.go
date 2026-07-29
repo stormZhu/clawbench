@@ -129,7 +129,7 @@ type QueuedMessage struct {
 // ContentBlock represents a typed block within an assistant message's content.
 // Stored as JSON in the chat_history.content column.
 type ContentBlock struct {
-	Type        string         `json:"type"`                   // "thinking", "tool_use", "text", "warning", "error"
+	Type        string         `json:"type"`                   // "thinking", "tool_use", "text", "warning", "error", "retry"
 	Text        string         `json:"text,omitempty"`         // thinking, text, or warning/error content
 	Reason      string         `json:"reason,omitempty"`       // structured reason code for i18n (e.g. "disconnect", "timeout", "parse_error")
 	Name        string         `json:"name,omitempty"`         // tool name (tool_use)
@@ -139,8 +139,10 @@ type ContentBlock struct {
 	Status      string         `json:"status,omitempty"`       // tool execution status: "success", "error" (tool_use)
 	Done        bool           `json:"done"`                   // tool_use input complete (tool_use) — no omitempty: done=false must round-trip through DB
 	Summary     string         `json:"summary,omitempty"`      // extracted display summary (tool_use) — redundant, avoids loading input for toolbar
-	DisplayName string         `json:"display_name,omitempty"` // subagent_type for Agent tools (tool_use) — redundant, replaces toolDisplayName() lookup
-	FilePath    string         `json:"file_path,omitempty"`    // detected file path (tool_use) — redundant, for FILE_MODIFYING_TOOLS detection
+	DisplayName  string         `json:"display_name,omitempty"` // subagent_type for Agent tools (tool_use) — redundant, replaces toolDisplayName() lookup
+	FilePath     string         `json:"file_path,omitempty"`    // detected file path (tool_use) — redundant, for FILE_MODIFYING_TOOLS detection
+	Attempt      int            `json:"attempt,omitempty"`      // 1-based retry attempt (type=retry)
+	MaxAttempts  int            `json:"maxAttempts,omitempty"`  // total retry budget (type=retry)
 }
 
 // MarshalJSON implements custom serialization for ContentBlock.

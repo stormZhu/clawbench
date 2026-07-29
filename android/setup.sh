@@ -64,11 +64,36 @@ if [ -n "$ANDROID_HOME" ] && [ ! -f "local.properties" ]; then
     echo "Created local.properties with ANDROID_HOME=$ANDROID_HOME"
 fi
 
+# Create a local development release keystore if missing.
+# Official release keystores are provided by CI secrets and are gitignored.
+if [ ! -f "clawbench.jks" ]; then
+    KEYTOOL_BIN="keytool"
+    if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/keytool" ]; then
+        KEYTOOL_BIN="$JAVA_HOME/bin/keytool"
+    fi
+    echo ""
+    echo "Generating local development keystore (android/clawbench.jks)..."
+    "$KEYTOOL_BIN" -genkeypair \
+        -v \
+        -keystore clawbench.jks \
+        -storepass clawbench123 \
+        -keypass clawbench123 \
+        -alias clawbench \
+        -keyalg RSA \
+        -keysize 2048 \
+        -validity 10000 \
+        -dname "CN=ClawBench Dev, OU=Dev, O=ClawBench, L=Local, ST=Local, C=US"
+    echo "Created local keystore: $SCRIPT_DIR/clawbench.jks"
+fi
+
 echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "To build the debug APK:"
 echo "  cd $SCRIPT_DIR && ./gradlew assembleDebug"
+echo ""
+echo "To build the release APK (local/dev keystore):"
+echo "  cd $SCRIPT_DIR && ./gradlew assembleRelease"
 echo ""
 echo "To install on a connected device:"
 echo "  cd $SCRIPT_DIR && ./gradlew installDebug"

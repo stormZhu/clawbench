@@ -276,8 +276,6 @@ type StreamEvent struct {
 	UserMessage    *UserMessageData       // User message for cross-device sync (Type=user_message)
 	Attempt        int                    // 1-based attempt number for Type=retry
 	MaxAttempts    int                    // Total attempts budget for Type=retry
-	Attempt        int                    // 1-based attempt number for Type=retry
-	MaxAttempts    int                    // Total attempts budget for Type=retry
 }
 
 // ToolCall represents a tool invocation by the AI.

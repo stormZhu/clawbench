@@ -642,7 +642,7 @@ func executeStreamRun(
 	// If session transport was acp-stdio but agent fell back to CLI, clear the
 	// stale transport override so subsequent messages don't keep warning.
 	if sessionTransport == "acp-stdio" {
-		if _, ok := backend.(*ai.ACPBackend); !ok {
+		if !ai.IsACPBackend(backend) {
 			_ = service.UpdateSessionTransport(sessionID, "")
 		}
 	}

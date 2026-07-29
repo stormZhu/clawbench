@@ -19,6 +19,11 @@ func (b *AutoResumeBackend) Name() string {
 	return b.inner.Name()
 }
 
+// Unwrap returns the inner backend (for type assertions through wrappers).
+func (b *AutoResumeBackend) Unwrap() AIBackend {
+	return b.inner
+}
+
 // ExecuteStream runs the inner backend and wraps the event stream with
 // ExitPlanMode auto-resume logic. If ExitPlanMode is detected, the first
 // stream is cancelled and a resume stream is started transparently.

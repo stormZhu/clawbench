@@ -61,6 +61,7 @@ export interface ToolUseEventData {
   input?: Record<string, unknown>
   done?: boolean
   status?: string
+  output?: string
   summary?: string
   display_name?: string
   file_path?: string
@@ -188,6 +189,10 @@ export function forceCleanupStreamingState(
             block.output = ''
           }
         }
+        // Stop auto-retry spinner once the stream ends/cancels.
+        if (block.type === 'retry') {
+          block.done = true
+        }
       }
     }
     // Extract scheduled tasks from the just-finished message
@@ -271,6 +276,9 @@ export function drainQueueMessage(
           if (isGarbageOutput(block.output)) {
             block.output = ''
           }
+        }
+        if (block.type === 'retry') {
+          block.done = true
         }
       }
     }
