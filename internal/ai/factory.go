@@ -16,19 +16,22 @@ var (
 )
 
 type BackendFactoryEntry struct {
-	NewBackendFn func() AIBackend // returns a new backend instance
+	NewBackendFn    func() AIBackend // returns a new backend instance
+	NeedsAutoResume bool             // wrap with AutoResumeBackend?
 }
 
 // RegisterBackend registers a backend factory function.
 // Called by backend plugin sub-packages in their init().
-func RegisterBackend(id string, newBackend func() AIBackend) {
+func RegisterBackend(id string, newBackend func() AIBackend, needsAutoResume ...bool) {
 	backendFactoriesMu.Lock()
 	defer backendFactoriesMu.Unlock()
 	if _, exists := backendFactories[id]; exists {
 		panic(fmt.Sprintf("backend factory already registered: %s", id))
 	}
+	autoResume := len(needsAutoResume) > 0 && needsAutoResume[0]
 	backendFactories[id] = &BackendFactoryEntry{
-		NewBackendFn: newBackend,
+		NewBackendFn:    newBackend,
+		NeedsAutoResume: autoResume,
 	}
 }
 
@@ -63,7 +66,10 @@ func NewBackend(backendType string) (AIBackend, error) {
 	// Try plugin registry first (migrated backends)
 	if entry := lookupBackendFactory(backendType); entry != nil {
 		backend := entry.NewBackendFn()
-		return backend, nil
+		if entry.NeedsAutoResume {
+			backend = &AutoResumeBackend{inner: backend}
+		}
+		return WithRequestRetry(backend), nil
 	}
 
 	// All backends have been migrated to the plugin registry.
@@ -100,7 +106,7 @@ func NewBackendForAgentWithTransport(backendType, agentID, transportOverride str
 					if err != nil {
 						return nil, fmt.Errorf("acp backend for agent %q: %w", agentID, err)
 					}
-					return acpBackend, nil
+					return WithRequestRetry(acpBackend), nil
 				}
 				// transport override says acp-stdio but agent doesn't support it;
 				// fall through to CLI backend instead of erroring out.
@@ -111,4 +117,31 @@ func NewBackendForAgentWithTransport(backendType, agentID, transportOverride str
 
 	// Fall back to CLI backend
 	return NewBackend(backendType)
+}
+
+// backendUnwrapper is implemented by decorator backends that wrap another AIBackend.
+type backendUnwrapper interface {
+	Unwrap() AIBackend
+}
+
+// UnwrapBackend peels decorator wrappers (retry / auto-resume) until the concrete backend.
+func UnwrapBackend(backend AIBackend) AIBackend {
+	for backend != nil {
+		u, ok := backend.(backendUnwrapper)
+		if !ok {
+			break
+		}
+		inner := u.Unwrap()
+		if inner == nil || inner == backend {
+			break
+		}
+		backend = inner
+	}
+	return backend
+}
+
+// IsACPBackend reports whether backend (possibly wrapped) is an ACPBackend.
+func IsACPBackend(backend AIBackend) bool {
+	_, ok := UnwrapBackend(backend).(*ACPBackend)
+	return ok
 }

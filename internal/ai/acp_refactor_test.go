@@ -949,6 +949,15 @@ func TestRefactor_BuildPromptBlocks(t *testing.T) {
 		require.Len(t, blocks, 1)
 		require.NotNil(t, blocks[0].Text)
 		assert.Equal(t, "hello world", blocks[0].Text.Text)
+		require.NotNil(t, blocks[0].Text.Annotations, "annotations must be present for Grok compatibility")
+	})
+
+	t.Run("text_block_keeps_annotations_struct", func(t *testing.T) {
+		block := acpTextBlock("hi")
+		require.NotNil(t, block.Text)
+		require.NotNil(t, block.Text.Annotations)
+		// Note: acp-go-sdk ContentBlock.MarshalJSON strips annotations; the
+		// acpStdinFilter re-injects them on the wire. See acp_stdin_filter_test.go.
 	})
 
 	t.Run("with_system_prompt", func(t *testing.T) {

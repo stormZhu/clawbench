@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-ClawBench 是移动优先的 AI 工作站，将 AI CLI 工具（CodeBuddy、Claude Code、OpenCode、Codex、Qoder CLI、VeCLI、CodeWhale、MiMo-Code、Pi、Copilot、Kimi）封装为 Web 平台。Go 后端调用 CLI 工具，通过 WebSocket 流式传输 JSON 事件；Vue 3 前端实时渲染。支持 ACP (Agent Client Protocol) stdio 传输（含桥接适配器）、SSH 隧道端口转发、定时任务系统。
+ClawBench 是移动优先的 AI 工作站，将 AI CLI 工具（CodeBuddy、Claude Code、OpenCode、Codex、Qoder CLI、VeCLI、CodeWhale、MiMo-Code、Pi、Cline、Copilot、Kimi、Grok）封装为 Web 平台。Go 后端调用 CLI 工具，通过 WebSocket 流式传输 JSON 事件；Vue 3 前端实时渲染。支持 ACP (Agent Client Protocol) stdio 传输（含桥接适配器）、SSH 隧道端口转发、定时任务系统。
 
 规格文档：`docs/spec/`
 
@@ -49,7 +49,7 @@ npm test                             # Vitest 前端测试
 |---|------|
 | `internal/handler/` | HTTP 端点，所有 `/api/` 路由经 `middleware.Auth` 鉴权，聊天通过 WebSocket 流式传输 |
 | `internal/service/` | 业务逻辑：聊天持久化、自动摘要、调度器、SQLite、Schema 迁移、Agent 存储、API 密钥加密、会话归档留存期自动清理（SessionCleanupWorker） |
-| `internal/ai/` + `backends/` | AI 后端抽象：`AIBackend` → `CLIBackend`（CLI+行解析）或 `ACPBackend`（JSON-RPC over stdio）。12 个后端子包通过 `ai.RegisterBackend()` 注册 |
+| `internal/ai/` + `backends/` | AI 后端抽象：`AIBackend` → `CLIBackend`（CLI+行解析）→ `AutoResumeBackend`（计划模式自动续行）→ `ACPBackend`（JSON-RPC over stdio）。13 个后端子包（含 Grok）通过 `ai.RegisterBackend()` 注册 |
 | `internal/model/` | 数据模型、后端注册表、模型发现、28 个 LLM Provider |
 | `internal/speech/` | TTS：Edge TTS、Piper、Kokoro、MOSS-TTS-Nano |
 | `internal/rag/` | RAG：SQLite + sqlite-vec 向量存储 + FTS5 全文检索，OpenAI 兼容嵌入 API；消息聚类分析（ClusterWorker：Union-Find + Sørensen-Dice） |
@@ -80,4 +80,3 @@ Composable 按域分组：Chat、Session、Terminal、File、Navigation/Gesture�
 - **功能和 Bug 修复必须包含单元测试**：Go 用 `*_test.go`，前端用 `.test.ts`，放在对应代码旁。测试须验证具体行为，非泛化快乐路径。
 - **覆盖率门槛**：每 PR/推送到 main 强制执行——包级覆盖率不低于基线、变更行覆盖率 ≥ 80%。
 - **推送前必须运行本地检查**：`./scripts/pre-push-checks.sh`
-

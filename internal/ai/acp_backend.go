@@ -12,13 +12,13 @@ import (
 	"clawbench/internal/model"
 )
 
-// ACPBackend implements the AIBackend interface using the Agent Client Protocol.
-// Each ClawBench session gets its own dedicated agent process (one-to-one model).
+// ACPBackend implements AIBackend over the Agent Client Protocol (one ClawBench
+// chat session maps to one long-lived ACP agent process / connection).
 //
-//   - Each ClawBench session = one agent subprocess (acp-stdio)
-//   - Agent processes are never idle-reaped
-//   - If the process dies, it is respawned and the session is recovered via ResumeSession
-//   - Cancel marks the connection as dead; next prompt triggers respawn + ResumeSession
+// Session recovery after respawn prefers session/resume when the agent supports
+// it (Claude, CodeBuddy, …). Agents that only implement session/load (notably
+// Grok) recover via LoadSession instead. User cancel keeps a healthy peer alive
+// so the next prompt can reuse the same ACP session without respawn/resume/load.
 type ACPBackend struct {
 	agent *model.Agent // resolved agent config
 }
@@ -39,8 +39,10 @@ func (b *ACPBackend) Name() string {
 
 // ExecuteStream runs the ACP agent and returns a channel of streaming events.
 //
-// Flow: GetOrCreateConn → (ResumeSession or NewSession) → emit cached state → Prompt
-// On peer disconnect during Prompt, automatically retries once after respawn + ResumeSession.
+// Flow: GetOrCreateConn → (ResumeSession / LoadSession recovery or NewSession)
+// → emit cached state → Prompt.
+// On peer disconnect during Prompt, automatically retries once after respawn +
+// session recovery (same ResumeSession-or-LoadSession path as GetOrCreateConn).
 func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) { //nolint:gocognit,gocyclo // complex ACP protocol handler, refactoring would reduce readability
 	ch := make(chan StreamEvent, streamChanSize)
 
@@ -64,7 +66,7 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 			// Do NOT fall back to CLI backend: the user chose ACP transport
 			// and silent fallback hides real problems (e.g., NewSession timeout).
 			slog.Error("acp: connection failed", "agent_id", b.agent.ID, "error", err)
-			forwardACPEvent(ch, StreamEvent{Type: "error", Error: fmt.Sprintf("acp: connection: %v", err), Reason: ReasonBackendExit})
+			forwardACPEvent(ch, StreamEvent{Type: "error", Error: "acp: connection: " + formatACPUserError(err), Reason: ReasonBackendExit})
 			return
 		}
 
@@ -102,11 +104,71 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 				return
 			}
 
-			// If the error is a retryable disconnect (peer disconnect or config-killed
-			// connection), retry once after respawn + ResumeSession.
+			// Grok ACP bug: after model work completes, packaging the turn can
+			// fail with "serialization error: missing field annotations" and
+			// leave the live ACP session sticky-broken (even simple follow-ups
+			// fail). SDK upgrade does not help (v0.13.5 is latest and still
+			// strips annotations). Recover by rotating to session/new on the
+			// same process and retrying the prompt once (agent-side history
+			// for that session is discarded by design).
+			if isACPAnnotationsSerializationError(err) && conn.IsAlive() {
+				slog.Warn("acp: annotations serialization error, rotating session and retrying once",
+					"session_id", req.SessionID, "acp_sid", acpSessionID, "error", err)
+				forwardACPEvent(ch, StreamEvent{
+					Type:        "retry",
+					Content:     formatACPPromptUserError(err),
+					Reason:      ReasonRetrying,
+					Attempt:     2,
+					MaxAttempts: 2,
+				})
+				if _, rotErr := conn.ReplaceSession(ctx); rotErr != nil {
+					slog.Error("acp: session rotate failed after annotations error",
+						"session_id", req.SessionID, "error", rotErr)
+					forwardACPEvent(ch, StreamEvent{
+						Type:    "warning",
+						Content: formatACPPromptUserError(err) + " (session rotate failed: " + formatACPUserError(rotErr) + ")",
+						Reason:  ReasonRequestFailed,
+					})
+					forwardACPEvent(ch, StreamEvent{Type: "done"})
+					return
+				}
+				b.emitSessionAndCacheState(conn, true, ch)
+				conn.SetAutoApprove(getSessionAutoApprove(req.SessionID))
+				retryErr := conn.Prompt(ctx, b.buildPromptBlocks(req), ch, req)
+				if retryErr != nil {
+					if ctx.Err() != nil {
+						forwardACPEvent(ch, StreamEvent{Type: "done"})
+						return
+					}
+					slog.Error("acp: annotations recovery retry failed",
+						"session_id", req.SessionID,
+						"original_error", formatACPUserError(err),
+						"retry_error", formatACPUserError(retryErr))
+					forwardACPEvent(ch, StreamEvent{
+						Type:    "warning",
+						Content: formatACPPromptUserError(err) + " (retry also failed: " + formatACPUserError(retryErr) + ")",
+						Reason:  ReasonRequestFailed,
+					})
+					forwardACPEvent(ch, StreamEvent{Type: "done"})
+					return
+				}
+				forwardACPEvent(ch, StreamEvent{Type: "done"})
+				return
+			}
+
+			// If the error is a retryable disconnect (peer disconnect or
+			// config-killed connection), retry once after respawn + recovery.
 			if isACPPeerDisconnected(err) || isConfigKilledConnection(err) {
 				slog.Warn("acp: connection lost during prompt, retrying after respawn",
 					"session_id", req.SessionID, "acp_sid", acpSessionID, "error", err)
+				// Surface retry attempt to UI (peer-disconnect recovery is attempt 2 of 2).
+				forwardACPEvent(ch, StreamEvent{
+					Type:        "retry",
+					Content:     formatACPPromptUserError(err),
+					Reason:      ReasonRetrying,
+					Attempt:     2,
+					MaxAttempts: 2,
+				})
 
 				// If a config option killed the connection, skip that config on retry
 				// to avoid crashing the respawned process with the same value.
@@ -130,7 +192,7 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 
 				conn2, isNew2, retryErr := mgr.GetOrCreateConn(ctx, b.agent, req.SessionID, req.WorkDir)
 				if retryErr != nil {
-					forwardACPEvent(ch, StreamEvent{Type: "error", Error: fmt.Sprintf("acp: prompt: %v (retry respawn failed: %v)", err, retryErr), Reason: ReasonBackendExit})
+					forwardACPEvent(ch, StreamEvent{Type: "error", Error: formatACPPromptUserError(err) + " (retry respawn failed: " + formatACPUserError(retryErr) + ")", Reason: ReasonBackendExit})
 					return
 				}
 				// Re-emit session/cache state for the respawned connection
@@ -147,9 +209,9 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 					}
 					slog.Error("acp: retry also failed after respawn",
 						"session_id", req.SessionID,
-						"original_error", err.Error(),
-						"retry_error", retryPromptErr.Error())
-					forwardACPEvent(ch, StreamEvent{Type: "error", Error: fmt.Sprintf("acp: prompt: %v (retry also failed: %v)", err, retryPromptErr), Reason: ReasonBackendExit})
+						"original_error", formatACPUserError(err),
+						"retry_error", formatACPUserError(retryPromptErr))
+					forwardACPEvent(ch, StreamEvent{Type: "error", Error: formatACPPromptUserError(err) + " (retry also failed: " + formatACPUserError(retryPromptErr) + ")", Reason: ReasonBackendExit})
 					return
 				}
 				// Retry succeeded
@@ -161,17 +223,8 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 			// agent cancelled the turn). The agent process is still alive and
 			// the connection is usable — surface as an amber warning card so
 			// the user can retry without losing the session.
-			//
-			// Extract human-readable error message from ACP RequestError.
-			// RequestError.Error() returns the full JSON blob which is not
-			// useful to the end user — we want just the .Message field
-			// (e.g. "Internal error: Upstream request failed: [invalid_request_error] Insufficient Balance").
-			errContent := err.Error()
-			var reqErr *acp.RequestError
-			if errors.As(err, &reqErr) {
-				errContent = reqErr.Message
-			}
-			forwardACPEvent(ch, StreamEvent{Type: "warning", Content: errContent, Reason: ReasonRequestFailed})
+			// Prefer RequestError.Data (real agent/API reason) over raw JSON-RPC.
+			forwardACPEvent(ch, StreamEvent{Type: "warning", Content: formatACPPromptUserError(err), Reason: ReasonRequestFailed})
 			forwardACPEvent(ch, StreamEvent{Type: "done"})
 			return
 		}

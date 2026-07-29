@@ -25,7 +25,38 @@ type pendingPermission struct {
 	ToolName   string
 	ToolInput  string // JSON-encoded raw input
 	Options    []acp.PermissionOption
-	Ch         chan acp.RequestPermissionResponse
+	Ch         chan permissionUserReply
+}
+
+// FormatPermissionDecisionOutput encodes a permission decision for the UI.
+// Wire format: "<decision>|<kind>|<optionId>|<label>"
+//
+//	decision: auto_approved | approved | cancelled
+//	kind:     ACP PermissionOptionKind (allow_once, allow_always, ...) or empty
+//	optionId: PermissionOption.OptionId (distinguishes Codex session vs exec-policy amendment)
+//	label:    human option name from the agent (may be empty)
+//
+// Legacy values still accepted by the frontend:
+//   plain: "Approved" / "Cancelled" / "Auto-Approved"
+//   3-part: "<decision>|<kind>|<label>"
+func FormatPermissionDecisionOutput(decision, kind, optionID, label string) string {
+	return decision + "|" + kind + "|" + optionID + "|" + label
+}
+
+// permissionUserReply is the frontend's answer to a pending permission card.
+// OptionID is set for both allow and reject clicks so tool_result can label the choice.
+type permissionUserReply struct {
+	OptionID  string
+	Cancelled bool
+}
+
+func lookupPermissionOption(options []acp.PermissionOption, optionID string) (kind, name string) {
+	for _, opt := range options {
+		if string(opt.OptionId) == optionID {
+			return string(opt.Kind), opt.Name
+		}
+	}
+	return "", ""
 }
 
 // ClawBenchACPClient implements the acp.Client interface to handle
@@ -92,9 +123,7 @@ func (c *ClawBenchACPClient) UnregisterSession(acpSessionID string) {
 	// Cancel any pending permission requests for this session
 	for key, pp := range c.pendingPermission {
 		if pp.SessionID == acpSessionID {
-			pp.Ch <- acp.RequestPermissionResponse{
-				Outcome: acp.NewRequestPermissionOutcomeCancelled(),
-			}
+			pp.Ch <- permissionUserReply{Cancelled: true}
 			delete(c.pendingPermission, key)
 		}
 	}
@@ -244,7 +273,7 @@ func (c *ClawBenchACPClient) RequestPermission(ctx context.Context, p acp.Reques
 		ToolName:   toolName,
 		ToolInput:  toolInput,
 		Options:    p.Options,
-		Ch:         make(chan acp.RequestPermissionResponse, 1),
+		Ch:         make(chan permissionUserReply, 1),
 	}
 
 	// Register the pending permission
@@ -325,13 +354,14 @@ func (c *ClawBenchACPClient) RequestPermission(ctx context.Context, p acp.Reques
 			c.mu.Unlock()
 
 			// Emit tool_result to mark the PermissionApproval as done
+			optKind, optName := lookupPermissionOption(p.Options, allowOptionID)
 			forwardACPEvent(ch, StreamEvent{
 				Type: "tool_result",
 				Tool: &ToolCall{
 					ID:     permissionBlockID,
 					Done:   true,
 					Status: "success",
-					Output: "Auto-Approved",
+					Output: FormatPermissionDecisionOutput("auto_approved", optKind, allowOptionID, optName),
 				},
 			})
 
@@ -364,7 +394,7 @@ func (c *ClawBenchACPClient) RequestPermission(ctx context.Context, p acp.Reques
 
 	// Block until user responds or context is cancelled
 	select {
-	case resp := <-pp.Ch:
+	case reply := <-pp.Ch:
 		c.mu.Lock()
 		delete(c.pendingPermission, key)
 		c.mu.Unlock()
@@ -377,12 +407,23 @@ func (c *ClawBenchACPClient) RequestPermission(ctx context.Context, p acp.Reques
 			onPermissionStateChange(csid, false, "", "")
 		}
 
-		// Emit tool_result to mark the PermissionApproval as done
+		optKind, optName := lookupPermissionOption(pp.Options, reply.OptionID)
+
+		// Emit tool_result with structured decision so the UI can distinguish
+		// Allow Once / Allow for Session / Remember Pattern / Reject.
 		resultStatus := "success"
-		resultOutput := "Approved"
-		if resp.Outcome.Cancelled != nil {
+		resultOutput := FormatPermissionDecisionOutput("approved", optKind, reply.OptionID, optName)
+		var resp acp.RequestPermissionResponse
+		if reply.Cancelled {
 			resultStatus = "error"
-			resultOutput = "Cancelled"
+			resultOutput = FormatPermissionDecisionOutput("cancelled", optKind, reply.OptionID, optName)
+			resp = acp.RequestPermissionResponse{
+				Outcome: acp.NewRequestPermissionOutcomeCancelled(),
+			}
+		} else {
+			resp = acp.RequestPermissionResponse{
+				Outcome: acp.NewRequestPermissionOutcomeSelected(acp.PermissionOptionId(reply.OptionID)),
+			}
 		}
 		forwardACPEvent(ch, StreamEvent{
 			Type: "tool_result",
@@ -412,7 +453,7 @@ func (c *ClawBenchACPClient) RegisterPendingPermissionForTest(key string, pp *Pe
 	c.pendingPermission[key] = &pendingPermission{
 		SessionID:  pp.SessionID,
 		ToolCallID: pp.ToolCallID,
-		Ch:         make(chan acp.RequestPermissionResponse, 1),
+		Ch:         make(chan permissionUserReply, 1),
 	}
 	c.mu.Unlock()
 }
@@ -436,15 +477,10 @@ func (c *ClawBenchACPClient) RespondPermission(key string, optionID string, canc
 	delete(c.pendingPermission, key)
 	c.mu.Unlock()
 
-	if cancelled {
-		pp.Ch <- acp.RequestPermissionResponse{
-			Outcome: acp.NewRequestPermissionOutcomeCancelled(),
-		}
-	} else {
-		pp.Ch <- acp.RequestPermissionResponse{
-			Outcome: acp.NewRequestPermissionOutcomeSelected(acp.PermissionOptionId(optionID)),
-		}
-	}
+	// Keep OptionID even for reject/cancel so tool_result can label the choice
+	// (e.g. Reject vs Reject Always). ACP outcome still uses Cancelled for rejects
+	// that the frontend marks cancelled=true.
+	pp.Ch <- permissionUserReply{OptionID: optionID, Cancelled: cancelled}
 	return true
 }
 

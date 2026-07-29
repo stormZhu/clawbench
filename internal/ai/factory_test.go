@@ -11,34 +11,60 @@ import (
 // setupTestBackends registers backend factories for testing.
 // We can't import backend sub-packages due to import cycles,
 // so we register lightweight stubs that satisfy NewBackend's lookup.
+
+func hasAutoResumeWrapper(backend AIBackend) bool {
+	for backend != nil {
+		switch b := backend.(type) {
+		case *AutoResumeBackend:
+			return true
+		case backendUnwrapper:
+			backend = b.Unwrap()
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func hasRequestRetryWrapper(backend AIBackend) bool {
+	_, ok := backend.(*RequestRetryBackend)
+	return ok
+}
+
+func concreteBackend(backend AIBackend) AIBackend {
+	return UnwrapBackend(backend)
+}
+
 func setupTestBackends() {
 	backendFactoriesMu.Lock()
 	defer backendFactoriesMu.Unlock()
 	backendFactories = make(map[string]*BackendFactoryEntry)
 
-	stubs := []string{
-		"claude",
-		"codebuddy",
-		"opencode",
-		"qoder",
-		"vecli",
-		"pi",
-		"deepseek",
-		"kimi",
-		"copilot",
-		"codex",
-		"mimo",
+	stubs := map[string]bool{
+		"claude":    true,
+		"codebuddy": true,
+		"opencode":  false,
+		"qoder":     true,
+		"vecli":     false,
+		"pi":        true,
+		"deepseek":  true,
+		"kimi":      true,
+		"copilot":   true,
+		"codex":     false,
+		"mimo":      true,
 	}
-	for _, id := range stubs {
+	for id, needsAR := range stubs {
 		backendType := id // capture for closure
 		switch backendType {
 		case "vecli":
 			backendFactories[backendType] = &BackendFactoryEntry{
-				NewBackendFn: func() AIBackend { return NewVeCLIBackend() },
+				NewBackendFn:    func() AIBackend { return NewVeCLIBackend() },
+				NeedsAutoResume: needsAR,
 			}
 		case "codex":
 			backendFactories[backendType] = &BackendFactoryEntry{
-				NewBackendFn: func() AIBackend { return &CodexBackend{} },
+				NewBackendFn:    func() AIBackend { return &CodexBackend{} },
+				NeedsAutoResume: needsAR,
 			}
 		default:
 			backendFactories[backendType] = &BackendFactoryEntry{
@@ -50,6 +76,7 @@ func setupTestBackends() {
 						NewParserFn: func() LineParser { return &StreamParser{} },
 					}
 				},
+				NeedsAutoResume: needsAR,
 			}
 		}
 	}
@@ -61,8 +88,9 @@ func TestNewBackend_Claude(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "claude", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "claude should be a CLIBackend")
+	// Claude is wrapped in AutoResumeBackend (ExitPlanMode auto-resume)
+	assert.True(t, hasRequestRetryWrapper(backend), "claude should be wrapped in RequestRetryBackend")
+	assert.True(t, hasAutoResumeWrapper(backend), "claude should be wrapped in AutoResumeBackend")
 }
 
 func TestNewBackend_Codebuddy(t *testing.T) {
@@ -71,8 +99,9 @@ func TestNewBackend_Codebuddy(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "codebuddy", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "codebuddy should be a CLIBackend")
+	// Codebuddy is wrapped in AutoResumeBackend (ExitPlanMode auto-resume)
+	assert.True(t, hasRequestRetryWrapper(backend), "codebuddy should be wrapped in RequestRetryBackend")
+	assert.True(t, hasAutoResumeWrapper(backend), "codebuddy should be wrapped in AutoResumeBackend")
 }
 
 func TestNewBackend_OpenCode(t *testing.T) {
@@ -81,8 +110,9 @@ func TestNewBackend_OpenCode(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "opencode", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "opencode should be a CLIBackend")
+	// OpenCode is NOT wrapped in AutoResumeBackend (no ExitPlanMode issue)
+	assert.True(t, hasRequestRetryWrapper(backend), "opencode should be wrapped in RequestRetryBackend")
+	assert.False(t, hasAutoResumeWrapper(backend), "opencode should NOT be wrapped in AutoResumeBackend")
 }
 
 func TestNewBackend_Qoder(t *testing.T) {
@@ -91,8 +121,8 @@ func TestNewBackend_Qoder(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "qoder", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "qoder should be a CLIBackend")
+	// Verify AutoResumeBackend wrapping (Qoder has EnterPlanMode/ExitPlanMode)
+	assert.True(t, hasAutoResumeWrapper(backend), "qoder should be wrapped in AutoResumeBackend")
 }
 
 func TestNewBackend_Vecli(t *testing.T) {
@@ -101,8 +131,11 @@ func TestNewBackend_Vecli(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "vecli", backend.Name())
-	_, ok := backend.(*VeCLIBackend)
-	assert.True(t, ok, "vecli should be a VeCLIBackend")
+	// VeCLI is NOT wrapped in AutoResumeBackend (no ExitPlanMode detection)
+	assert.True(t, hasRequestRetryWrapper(backend), "vecli should be wrapped in RequestRetryBackend")
+	assert.False(t, hasAutoResumeWrapper(backend), "vecli should NOT be wrapped in AutoResumeBackend")
+	_, ok := concreteBackend(backend).(*VeCLIBackend)
+	assert.True(t, ok, "vecli concrete backend should be VeCLIBackend")
 }
 
 func TestNewBackend_Pi(t *testing.T) {
@@ -111,8 +144,8 @@ func TestNewBackend_Pi(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "pi", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "pi should be a CLIBackend")
+	// Pi is wrapped in AutoResumeBackend (has ExitPlanMode)
+	assert.True(t, hasAutoResumeWrapper(backend), "pi should be wrapped in AutoResumeBackend")
 }
 
 func TestNewBackend_DeepSeek(t *testing.T) {
@@ -121,8 +154,8 @@ func TestNewBackend_DeepSeek(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "deepseek", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "deepseek should be a CLIBackend")
+	// DeepSeek is wrapped in AutoResumeBackend (supports ExitPlanMode)
+	assert.True(t, hasAutoResumeWrapper(backend), "deepseek should be wrapped in AutoResumeBackend")
 }
 
 func TestNewBackend_Kimi(t *testing.T) {
@@ -131,8 +164,8 @@ func TestNewBackend_Kimi(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "kimi", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "kimi should be a CLIBackend")
+	// Kimi is wrapped in AutoResumeBackend (supports plan mode)
+	assert.True(t, hasAutoResumeWrapper(backend), "kimi should be wrapped in AutoResumeBackend")
 }
 
 func TestNewBackend_Copilot(t *testing.T) {
@@ -141,8 +174,8 @@ func TestNewBackend_Copilot(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "copilot", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "copilot should be a CLIBackend")
+	// Copilot is wrapped in AutoResumeBackend (supports plan mode)
+	assert.True(t, hasAutoResumeWrapper(backend), "copilot should be wrapped in AutoResumeBackend")
 }
 
 func TestNewBackend_Codex(t *testing.T) {
@@ -151,8 +184,11 @@ func TestNewBackend_Codex(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "codex", backend.Name())
-	_, ok := backend.(*CodexBackend)
-	assert.True(t, ok, "codex should be a CodexBackend")
+	// Codex is NOT wrapped in AutoResumeBackend (custom ExecuteStream, no ExitPlanMode)
+	assert.True(t, hasRequestRetryWrapper(backend), "codex should be wrapped in RequestRetryBackend")
+	assert.False(t, hasAutoResumeWrapper(backend), "codex should NOT be wrapped in AutoResumeBackend")
+	_, ok := concreteBackend(backend).(*CodexBackend)
+	assert.True(t, ok, "codex concrete backend should be CodexBackend")
 }
 
 func TestNewBackend_Unsupported(t *testing.T) {
@@ -180,14 +216,11 @@ func TestNewBackend_CaseSensitive(t *testing.T) {
 
 func TestBackendSupportsCLI(t *testing.T) {
 	setupTestBackends()
-	// Registered CLI backends report true
 	assert.True(t, BackendSupportsCLI("claude"))
 	assert.True(t, BackendSupportsCLI("kimi"))
-	assert.True(t, BackendSupportsCLI("codex")) // custom backend also counts as CLI
+	assert.True(t, BackendSupportsCLI("codex"))
 	assert.True(t, BackendSupportsCLI("vecli"))
-
-	// Unregistered backends report false
-	assert.False(t, BackendSupportsCLI("grok"), "ACP-only backend without CLI factory should report false")
+	assert.False(t, BackendSupportsCLI("grok"), "Grok remains ACP-only")
 	assert.False(t, BackendSupportsCLI("unsupported"))
 	assert.False(t, BackendSupportsCLI(""))
 }
@@ -200,8 +233,8 @@ func TestNewBackendForAgent_NoAgentID_FallsBackToCLI(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, backend)
 	assert.Equal(t, "claude", backend.Name())
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok)
+	// Falls back to CLI (AutoResumeBackend wrapping)
+	assert.True(t, hasAutoResumeWrapper(backend))
 }
 
 func TestNewBackendForAgent_UnknownAgentID_FallsBackToCLI(t *testing.T) {
@@ -232,9 +265,10 @@ func TestNewBackendForAgent_ACPStdioTransport(t *testing.T) {
 	assert.NotNil(t, backend)
 	assert.Equal(t, "claude", backend.Name())
 
-	// ACP backends are ACPBackend directly
-	_, ok := backend.(*ACPBackend)
-	assert.True(t, ok, "claude ACP should be ACPBackend directly")
+	// ACP backends are NOT wrapped in AutoResumeBackend (session/cancel replaces it)
+	assert.True(t, hasRequestRetryWrapper(backend), "claude ACP should be wrapped in RequestRetryBackend")
+	assert.True(t, IsACPBackend(backend), "claude ACP should be ACPBackend (no AutoResume wrapping)")
+	assert.False(t, hasAutoResumeWrapper(backend), "claude ACP should not have AutoResume")
 }
 
 func TestNewBackendForAgent_ACPHttpTransport_Unsupported(t *testing.T) {
@@ -256,9 +290,32 @@ func TestNewBackendForAgent_ACPHttpTransport_Unsupported(t *testing.T) {
 	assert.NotNil(t, backend)
 	assert.Equal(t, "codebuddy", backend.Name())
 
-	// Should fall back to CLIBackend (CLI mode), not ACPBackend
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "acp-http should fall back to CLIBackend")
+	// Should fall back to AutoResumeBackend (CLI mode), not ACPBackend
+	assert.True(t, hasAutoResumeWrapper(backend), "acp-http should fall back to CLI AutoResumeBackend")
+}
+
+func TestNewBackendForAgent_ACPNoAutoResume(t *testing.T) {
+	setupTestBackends()
+	origAgents := model.Agents
+	t.Cleanup(func() { model.Agents = origAgents })
+
+	model.Agents = map[string]*model.Agent{
+		"test-kimi": {
+			ID:         "test-kimi",
+			Backend:    "kimi",
+			Transport:  "acp-stdio",
+			AcpCommand: "kimi --acp",
+		},
+	}
+
+	backend, err := NewBackendForAgent("kimi", "test-kimi")
+	assert.NoError(t, err)
+	assert.NotNil(t, backend)
+	assert.Equal(t, "kimi", backend.Name())
+
+	// kimi ACP is NOT wrapped in AutoResumeBackend
+	assert.True(t, IsACPBackend(backend), "kimi ACP should be ACPBackend")
+	assert.False(t, hasAutoResumeWrapper(backend), "kimi ACP should not have AutoResume")
 }
 
 func TestNewBackendForAgent_CLITransport_FallsBack(t *testing.T) {
@@ -279,9 +336,10 @@ func TestNewBackendForAgent_CLITransport_FallsBack(t *testing.T) {
 	assert.NotNil(t, backend)
 	assert.Equal(t, "claude", backend.Name())
 
-	// Should be the standard CLIBackend (not ACPBackend)
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok)
+	// Should be the standard CLI AutoResumeBackend (not ACPBackend)
+	assert.True(t, hasAutoResumeWrapper(backend))
+	_, ok := concreteBackend(backend).(*CLIBackend)
+	assert.True(t, ok, "inner should be CLIBackend for cli transport")
 }
 
 func TestNewBackendForAgentWithTransport_ACPOverrideOnCLIAgent_FallsBack(t *testing.T) {
@@ -304,10 +362,7 @@ func TestNewBackendForAgentWithTransport_ACPOverrideOnCLIAgent_FallsBack(t *test
 	assert.NotNil(t, backend)
 	assert.Equal(t, "pi", backend.Name())
 
-	// Should be CLIBackend (CLI mode), NOT ACPBackend
-	_, ok := backend.(*CLIBackend)
-	assert.True(t, ok, "acp-stdio override on CLI agent should fall back to CLIBackend")
-
-	_, ok = backend.(*ACPBackend)
-	assert.False(t, ok, "should NOT be ACPBackend when agent transport is cli")
+	// Should be AutoResumeBackend (CLI mode), NOT ACPBackend
+	assert.True(t, hasAutoResumeWrapper(backend), "acp-stdio override on CLI agent should fall back to AutoResumeBackend")
+	assert.False(t, IsACPBackend(backend), "acp-stdio override on CLI agent should not be ACPBackend")
 }
