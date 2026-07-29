@@ -18,15 +18,18 @@ func init() {
 }
 
 // codexModelRe matches OpenAI model IDs in the Codex binary strings output.
-var codexModelRe = regexp.MustCompile(`^(gpt-\d+\.\d+(-mini)?|o[34](-mini)?)$`)
+var codexModelRe = regexp.MustCompile(`^(gpt-\d+\.\d+(-(mini|sol|terra|luna))?|o[34](-mini)?)$`)
 
 // codexModelOrder defines the preferred display order for Codex models.
 var codexModelOrder = map[string]int{
-	"gpt-5.5":      0,
-	"gpt-5.4":      1,
-	"gpt-5.4-mini": 2,
-	"o3":           3,
-	"o4-mini":      4,
+	"gpt-5.6-sol":   0,
+	"gpt-5.6-terra": 1,
+	"gpt-5.6-luna":  2,
+	"gpt-5.5":       3,
+	"gpt-5.4":       4,
+	"gpt-5.4-mini":  5,
+	"o3":            6,
+	"o4-mini":       7,
 }
 
 // codexTargetTriple returns the Rust target triple for the current platform.
@@ -190,7 +193,10 @@ func discoverCodexModelsFromStateDB() []model.AgentModel {
 // These are updated manually based on OpenAI's model catalog.
 // When the strings approach or state DB approach works, those take priority.
 var codexDefaultModels = []model.AgentModel{
-	{ID: "gpt-5.5", Name: "GPT-5.5", Default: true},
+	{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", Default: true},
+	{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Default: false},
+	{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Default: false},
+	{ID: "gpt-5.5", Name: "GPT-5.5", Default: false},
 	{ID: "gpt-5.4", Name: "GPT-5.4", Default: false},
 	{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini", Default: false},
 }

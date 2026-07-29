@@ -552,6 +552,46 @@ func TestAgentRefreshModels_Success(t *testing.T) {
 	assert.Equal(t, "glm-5.1", model.Agents["codebuddy"].Models[1].ID)
 }
 
+func TestAgentRefreshModels_UsesACPModelsWithoutOverwritingAgentConfig(t *testing.T) {
+	defer setupAgentTestEnv(t)()
+
+	const agentID = "codex-acp-refresh"
+	agent := &model.Agent{
+		ID:         agentID,
+		Name:       "Codex ACP",
+		Backend:    "codex",
+		AcpCommand: "codex --acp",
+		Models:     []model.AgentModel{{ID: "gpt-5.5", Name: "GPT-5.5", Default: true}},
+	}
+	require.NoError(t, service.SaveAgent(service.UnsafeDBForTest(), agent))
+	model.Agents[agentID] = agent
+	model.AgentList = append(model.AgentList, agent)
+	acpModels := []model.AgentModel{
+		{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", Default: true},
+		{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra"},
+		{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna"},
+	}
+	ai.GetAgentCapabilityRegistry().UpdateModels(agentID, acpModels)
+
+	originalDiscover := model.DiscoverModels
+	model.DiscoverModels = func(spec model.BackendSpec) []model.AgentModel {
+		return []model.AgentModel{{ID: "gpt-5.5", Name: "GPT-5.5", Default: true}}
+	}
+	defer func() { model.DiscoverModels = originalDiscover }()
+
+	req := newRequest(t, http.MethodPost, "/api/agents/"+agentID+"/refresh-models", nil)
+	withAuthCookie(req, model.SessionToken)
+	w := callHandler(ServeAgentRefreshModels, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Models []model.AgentModel `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, acpModels, resp.Models)
+	assert.Equal(t, "gpt-5.5", agent.Models[0].ID)
+}
+
 func TestAgentRefreshModels_AgentNotFound(t *testing.T) {
 	defer setupAgentTestEnv(t)()
 

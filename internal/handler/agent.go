@@ -548,9 +548,9 @@ func containsPromptOverride(prompt string) bool {
 	return false
 }
 
-// ServeAgentRefreshModels handles POST /api/agents/{id}/refresh-models — triggers model re-discovery
-// for the specified agent and returns the updated model list. The discovered models completely replace
-// the agent's current model list (both in memory and in the cache file).
+// ServeAgentRefreshModels handles POST /api/agents/{id}/refresh-models — refreshes
+// the model list for the specified agent and returns it. ACP models are already
+// discovered by the ACP connection and must not be replaced by CLI discovery.
 //
 // Refresh strategy: CLI model discovery via BackendSpec (e.g., pi --list-models)
 func ServeAgentRefreshModels(w http.ResponseWriter, r *http.Request) {
@@ -579,10 +579,19 @@ func ServeAgentRefreshModels(w http.ResponseWriter, r *http.Request) {
 
 	var models []model.AgentModel
 	canDiscover := false // whether any discovery method is available
+	usesACPModels := false
+
+	if agent.SupportsACP() {
+		if state := ai.GetAgentCapabilityRegistry().GetModelListState(agentID, ""); state != nil && len(state.Models) > 0 {
+			models = append([]model.AgentModel(nil), state.Models...)
+			canDiscover = true
+			usesACPModels = true
+		}
+	}
 
 	// CLI model discovery via BackendSpec
 	spec := model.FindSpecByBackend(agent.Backend)
-	if spec != nil && model.CanDiscoverModels(*spec) {
+	if len(models) == 0 && spec != nil && model.CanDiscoverModels(*spec) {
 		canDiscover = true
 		models = model.DiscoverModels(*spec)
 	}
@@ -606,13 +615,13 @@ func ServeAgentRefreshModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update in-memory agent (regardless of ModelsAutoDetected — manual refresh always overrides)
-	agent.Models = models
-	agent.ModelsAutoDetected = true
+	if !usesACPModels {
+		agent.Models = models
+		agent.ModelsAutoDetected = true
 
-	// Update database
-	if err := service.SaveAgent(service.WriteDB(), agent); err != nil {
-		slog.Warn("failed to persist model refresh to DB", "agent", agentID, "error", err)
+		if err := service.SaveAgent(service.WriteDB(), agent); err != nil {
+			slog.Warn("failed to persist model refresh to DB", "agent", agentID, "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
