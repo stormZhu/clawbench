@@ -68,7 +68,7 @@ func TestTestFRP_EmptyAddr(t *testing.T) {
 func TestTestFRP_Success(t *testing.T) {
 	// Start a TCP listener
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer ln.Close()
 
 	port := ln.Addr().(*net.TCPAddr).Port
