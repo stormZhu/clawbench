@@ -104,3 +104,4 @@ skills-lock.json
 npm/tmp/
 npm/platforms/*/bin/
 npm/platforms/*/config/
+.mindfs/
