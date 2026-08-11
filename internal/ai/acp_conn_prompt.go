@@ -148,9 +148,14 @@ func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, streamCh chan<- Stre
 	// Emit metadata event for persistence (SessionExecutor captures these)
 	forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
 
-	// Also update UsageState so the context chip shows input/output tokens
+	// Also update UsageState so the context chip shows input/output tokens.
+	// cachedUsageState may be nil if no usage_update has arrived yet (e.g. the
+	// agent doesn't emit SessionUpdate usage); fall back to zero values.
+	var cached UsageState
 	c.mu.Lock()
-	cached := c.cachedUsageState
+	if c.cachedUsageState != nil {
+		cached = *c.cachedUsageState
+	}
 	c.mu.Unlock()
 	usageState := &UsageState{
 		Used:              cached.Used,
