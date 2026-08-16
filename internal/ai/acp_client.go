@@ -116,14 +116,49 @@ func (c *ClawBenchACPClient) IsLoadSessionActive() bool {
 	return c.connRef.loadSessionActive.Load()
 }
 
+// StartLoadSessionReplay begins buffering notifications for a LoadSession
+// replay. The state transition and buffer reset share one lock with
+// SessionUpdate so a previous replay cannot leak into this one.
+func (c *ClawBenchACPClient) StartLoadSessionReplay() {
+	c.loadSessionBufMu.Lock()
+	c.loadSessionBuf = nil
+	if c.connRef != nil {
+		c.connRef.loadSessionActive.Store(true)
+	}
+	c.loadSessionBufMu.Unlock()
+}
+
+// StopAndTakeLoadSessionReplay atomically stops buffering and takes all
+// notifications collected so far. SessionUpdate cannot append after the flag
+// is cleared because it uses the same mutex for the check and append.
+func (c *ClawBenchACPClient) StopAndTakeLoadSessionReplay() []acp.SessionNotification {
+	c.loadSessionBufMu.Lock()
+	defer c.loadSessionBufMu.Unlock()
+	if c.connRef != nil {
+		c.connRef.loadSessionActive.Store(false)
+	}
+	buf := c.loadSessionBuf
+	c.loadSessionBuf = nil
+	return buf
+}
+
 // GetAndClearLoadSessionBuf returns all collected SessionUpdate notifications
-// from the LoadSession replay and clears the buffer.
+// from the LoadSession replay and clears the buffer. Callers that are ending
+// replay capture should use StopAndTakeLoadSessionReplay instead.
 func (c *ClawBenchACPClient) GetAndClearLoadSessionBuf() []acp.SessionNotification {
 	c.loadSessionBufMu.Lock()
 	buf := c.loadSessionBuf
 	c.loadSessionBuf = nil
 	c.loadSessionBufMu.Unlock()
 	return buf
+}
+
+// LoadSessionBufLen returns the number of replay notifications currently
+// buffered. Used by the LoadSession drain loop to detect replay quiescence.
+func (c *ClawBenchACPClient) LoadSessionBufLen() int {
+	c.loadSessionBufMu.Lock()
+	defer c.loadSessionBufMu.Unlock()
+	return len(c.loadSessionBuf)
 }
 
 // SetLoadSessionBufForTest injects replay notifications for testing.
@@ -187,12 +222,13 @@ func (c *ClawBenchACPClient) SessionUpdate(ctx context.Context, n acp.SessionNot
 	// During LoadSession replay, collect messages in buffer instead of
 	// routing to WS stream channels. The load handler reads them after
 	// the LoadSession RPC returns.
+	c.loadSessionBufMu.Lock()
 	if c.IsLoadSessionActive() {
-		c.loadSessionBufMu.Lock()
 		c.loadSessionBuf = append(c.loadSessionBuf, n)
 		c.loadSessionBufMu.Unlock()
 		return nil
 	}
+	c.loadSessionBufMu.Unlock()
 
 	c.mu.Lock()
 	ch, ok := c.sessionRoutes[string(n.SessionId)]

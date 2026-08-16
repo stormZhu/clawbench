@@ -106,11 +106,12 @@ func (c *ACPConn) ensureAliveWithSession(ctx context.Context, cwd string) (bool,
 	}
 	slog.Info("acp perf: ensureAliveWithSession.spawnLocked", "clawbench_sid", c.clawbenchSID, "elapsed", time.Since(spawnStart))
 
-	// LoadSession branch — explicit load request (acp-load endpoint).
+	// LoadSession branch — explicit load request (acp-load endpoint). The
+	// handler consumes the buffered replay itself, so dropReplay=false.
 	if c.loadTargetSID != "" {
 		loadSID := c.loadTargetSID
 		c.loadTargetSID = "" // clear to prevent reuse on next call
-		return c.recoverViaLoadSession(ctx, cwd, loadSID)
+		return c.recoverViaLoadSession(ctx, cwd, loadSID, false)
 	}
 
 	// Recover a previous session after the process died.
@@ -126,7 +127,9 @@ func (c *ACPConn) ensureAliveWithSession(ctx context.Context, cwd string) (bool,
 		if c.supportsLoadSession() {
 			slog.Info("acp conn: recovering previous session via LoadSession",
 				"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID)
-			return c.recoverViaLoadSession(ctx, cwd, acpSID)
+			// dropReplay=true: the replayed history is already persisted in
+			// ClawBench's DB; it must be discarded, not routed to the stream.
+			return c.recoverViaLoadSession(ctx, cwd, acpSID, true)
 		}
 
 		// Otherwise, recover via ResumeSession.
@@ -214,11 +217,25 @@ func (c *ACPConn) supportsLoadSession() bool {
 
 // recoverViaLoadSession recovers a session via LoadSession and returns
 // isNew=true (the session was re-established on a fresh process).
-func (c *ACPConn) recoverViaLoadSession(ctx context.Context, cwd, loadSID string) (bool, error) {
+//
+// dropReplay controls what happens to the LoadSession history replay:
+//   - true (automatic recovery after a process death): the replayed messages
+//     are already persisted in ClawBench's DB, so the replay is drained until
+//     the agent goes quiet and discarded. Agents may keep streaming replay
+//     notifications after the session/load response returns; clearing the
+//     buffer and the active flag as soon as the RPC returns lets those late
+//     notifications leak into the next prompt's live stream (stale content and
+//     re-surfaced interactive cards mixed into the new answer).
+//   - false (explicit acp-load flow): the replay flag and buffer are left
+//     intact so the caller can consume the buffered notifications itself.
+func (c *ACPConn) recoverViaLoadSession(ctx context.Context, cwd, loadSID string, dropReplay bool) (bool, error) {
 	loadCtx, loadCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer loadCancel()
 
 	c.loadSessionActive.Store(true)
+	if c.client != nil {
+		c.client.StartLoadSessionReplay()
+	}
 	loadStart := time.Now()
 	loadResp, err := c.conn.LoadSession(loadCtx, acp.LoadSessionRequest{
 		SessionId:  acp.SessionId(loadSID),
@@ -229,6 +246,9 @@ func (c *ACPConn) recoverViaLoadSession(ctx context.Context, cwd, loadSID string
 
 	if err != nil {
 		c.alive = false
+		if c.client != nil {
+			c.client.StopAndTakeLoadSessionReplay()
+		}
 		c.loadSessionActive.Store(false)
 		return false, fmt.Errorf("acp: session/load: %w", err)
 	}
@@ -237,20 +257,94 @@ func (c *ACPConn) recoverViaLoadSession(ctx context.Context, cwd, loadSID string
 	c.lastLoadSessionResp = &loadResp
 	c.lastUsed = time.Now()
 
-	// Drain the LoadSession replay buffer and clear the active flag. During
-	// automatic recovery after a process death, the replayed messages are
-	// already persisted in ClawBench's DB (they were captured before the process
-	// died), so they must not be routed to the live stream. Leaving
-	// loadSessionActive set would cause all subsequent SessionUpdate
-	// notifications (including the new prompt's output) to be swallowed into the
-	// buffer instead of reaching the stream, hanging the conversation.
-	if c.client != nil {
-		c.client.GetAndClearLoadSessionBuf()
+	if dropReplay {
+		// Drain and discard the replay (see doc comment). Leaving
+		// loadSessionActive set permanently is not an option either: all
+		// subsequent SessionUpdate notifications — including the new prompt's
+		// output — would be swallowed into the buffer instead of reaching the
+		// stream, hanging the conversation.
+		c.drainLoadSessionReplay(ctx)
 	}
-	c.loadSessionActive.Store(false)
 
 	slog.Info("acp conn: loaded session via LoadSession", "clawbench_sid", c.clawbenchSID, "acp_sid", loadSID)
 	return true, nil
+}
+
+// LoadSession replay drain tuning. Vars (not consts) so tests can shorten them.
+var (
+	loadSessionDrainPollInterval = 50 * time.Millisecond
+	loadSessionDrainQuietWindow  = 500 * time.Millisecond
+	loadSessionDrainMaxWait      = 10 * time.Second
+)
+
+// drainLoadSessionReplay waits until the LoadSession replay stream goes quiet
+// (no new notifications for loadSessionDrainQuietWindow), then discards the
+// buffered notifications and clears loadSessionActive. If no replay arrives at
+// all, it exits after one quiet window. Bounded by loadSessionDrainMaxWait so
+// a continuously replaying agent cannot stall recovery forever. Must be called
+// with c.mu held (the caller holds it for the whole recovery, matching the
+// LoadSession RPC itself).
+func (c *ACPConn) drainLoadSessionReplay(ctx context.Context) []acp.SessionNotification {
+	if c.client == nil {
+		c.loadSessionActive.Store(false)
+		return nil
+	}
+
+	drainStart := time.Now()
+	deadline := drainStart.Add(loadSessionDrainMaxWait)
+	lastLen := -1
+	lastChange := drainStart
+
+	for {
+		n := c.client.LoadSessionBufLen()
+		now := time.Now()
+		if n != lastLen {
+			lastLen = n
+			lastChange = now
+		} else if now.Sub(lastChange) >= loadSessionDrainQuietWindow {
+			// Stable — either the replay arrived and stopped, or no replay
+			// came during the quiet window. Safe to drop the flag.
+			break
+		}
+		if now.After(deadline) {
+			slog.Warn("acp conn: LoadSession replay still arriving after max drain wait, clearing anyway",
+				"clawbench_sid", c.clawbenchSID, "buffered", n, "elapsed", now.Sub(drainStart))
+			break
+		}
+		if ctx.Err() != nil {
+			slog.Warn("acp conn: LoadSession replay drain cancelled",
+				"clawbench_sid", c.clawbenchSID, "buffered", n, "error", ctx.Err())
+			break
+		}
+		timer := time.NewTimer(loadSessionDrainPollInterval)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
+	}
+
+	buf := c.client.StopAndTakeLoadSessionReplay()
+	c.loadSessionActive.Store(false)
+	slog.Info("acp conn: LoadSession replay drained",
+		"clawbench_sid", c.clawbenchSID,
+		"notifications", len(buf),
+		"elapsed", time.Since(drainStart))
+	return buf
+}
+
+// DrainLoadSessionReplay waits for replay quiescence and returns the replay
+// notifications while atomically ending replay capture. It is used by the
+// explicit acp-load handler as well as automatic recovery.
+func (c *ACPConn) DrainLoadSessionReplay(ctx context.Context) []acp.SessionNotification {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.drainLoadSessionReplay(ctx)
 }
 
 // recoverViaResumeSession recovers a session via ResumeSession and re-applies config.

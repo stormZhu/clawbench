@@ -3080,6 +3080,42 @@ func TestAIChat_POST_WithSessionID_Succeeds(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "AI goroutine should finish before teardown")
 }
 
+func TestAIChat_POST_ReplayPendingReturnsConflict(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "replay pending", "claude", "", "default", "chat")
+	assert.NoError(t, err)
+
+	agent := &model.Agent{ID: "claude", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"}
+	conn := ai.NewACPConnForTest(agent, sessionID)
+	client := ai.NewClawBenchACPClient()
+	conn.SetClientForTest(client)
+	conn.StartLoadSessionReplay()
+	mgr := ai.GetACPConnManager()
+	mgr.SetConnForTest(sessionID, conn)
+	t.Cleanup(func() { mgr.CloseConn(sessionID) })
+
+	body := map[string]string{"message": "must wait", "agentId": "claude"}
+	req := newRequest(t, http.MethodPost, "/api/ai/chat?session_id="+sessionID, body)
+	withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(AIChat, req)
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	var resp model.ErrorResponse
+	decodeRespJSON(t, w.Body, &resp)
+	assert.Equal(t, "SessionReplayPending", resp.MsgKey)
+
+	var count int
+	err = service.ReadDB().QueryRow(
+		"SELECT COUNT(*) FROM chat_history WHERE session_id = ? AND role = 'user'",
+		sessionID,
+	).Scan(&count)
+	assert.NoError(t, err)
+	assert.Zero(t, count, "rejected prompt must not be persisted")
+}
+
 // ============================================================================
 // ACP session resume after server restart — targeted tests
 // ============================================================================

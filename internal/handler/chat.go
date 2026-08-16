@@ -456,6 +456,13 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 
 	// Sync auto-approve mode from DB to ACPConn on prompt
 	if conn := ai.GetACPConnManager().GetConn(sessionID); conn != nil {
+		// An explicitly loaded ACP session is still consuming its history
+		// replay. Do not start a prompt until replay capture has ended, or its
+		// live updates would be indistinguishable from historical updates.
+		if conn.IsLoadSessionActive() {
+			writeLocalizedErrorf(w, r, http.StatusConflict, "SessionReplayPending")
+			return
+		}
 		conn.SetAutoApprove(service.GetSessionAutoApprove(sessionID))
 	}
 

@@ -1,4 +1,5 @@
 SessionNotRunning: Session is not running
+SessionReplayPending: Session history is still loading, please wait and try again
 SessionStreamNotFound: Session stream not found
 SessionStreamBusy: Session stream is being viewed on another device
 SessionLimitReached: Session limit reached ({{.MaxCount}}), please archive old sessions

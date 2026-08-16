@@ -729,10 +729,35 @@ func (c *ACPConn) GetAndClearLoadSessionResp() *acp.LoadSessionResponse {
 	return resp
 }
 
-// ClearLoadSessionActive sets loadSessionActive to false after the handler
-// has read the replay buffer.
+// ClearLoadSessionActive ends replay capture and discards any buffered
+// notifications. Callers that need to consume the replay should use
+// DrainLoadSessionReplay instead.
 func (c *ACPConn) ClearLoadSessionActive() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != nil {
+		c.client.StopAndTakeLoadSessionReplay()
+	}
 	c.loadSessionActive.Store(false)
+}
+
+// IsLoadSessionActive reports whether an ACP LoadSession replay is still being
+// captured. It is lock-free because ACP notification callbacks may run while
+// the connection mutex is held by an RPC.
+func (c *ACPConn) IsLoadSessionActive() bool {
+	return c.loadSessionActive.Load()
+}
+
+// StartLoadSessionReplay begins replay capture for tests and controlled
+// callers. Normal production recovery starts capture inside
+// recoverViaLoadSession before issuing the LoadSession RPC.
+func (c *ACPConn) StartLoadSessionReplay() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.loadSessionActive.Store(true)
+	if c.client != nil {
+		c.client.StartLoadSessionReplay()
+	}
 }
 
 // GetCurrentModeID returns the session's current mode ID.

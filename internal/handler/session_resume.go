@@ -255,9 +255,9 @@ func ServeACPLoadSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return sessionId immediately so the frontend can switch to the session
-	// without waiting for replay processing. The ACP connection is live and
-	// the user can send messages even before replay completes — the agent
-	// has full context from the loaded session.
+	// while replay processing continues. Input remains disabled until the
+	// replay_done event; otherwise live prompt updates could be mixed with the
+	// history notifications still being captured.
 	writeJSON(w, http.StatusOK, map[string]any{
 		strSessionID:    sessionID,
 		"replayPending": true,
@@ -284,17 +284,6 @@ func ServeACPLoadSession(w http.ResponseWriter, r *http.Request) {
 
 		replayStart := time.Now()
 
-		// Wait for late-arriving SessionUpdate notifications.
-		// Some ACP agents replay history via notifications that arrive
-		// after the LoadSession RPC response. A short delay ensures
-		// these are captured before we read the buffer.
-		time.Sleep(500 * time.Millisecond)
-
-		// Clear loadSessionActive BEFORE reading the buffer so that
-		// notifications arriving after our read are routed normally
-		// (to sessionRoutes → WS) instead of being orphaned in the buffer.
-		conn.ClearLoadSessionActive()
-
 		// Read buffered notifications
 		type persistedMessage struct {
 			role    string
@@ -309,7 +298,10 @@ func ServeACPLoadSession(w http.ResponseWriter, r *http.Request) {
 		var messages []persistedMessage
 
 		if client != nil {
-			buf := client.GetAndClearLoadSessionBuf()
+			// Wait for post-response replay notifications, then atomically stop
+			// capture and take the complete buffer. Use a background context because
+			// the HTTP request context is canceled after the response is written.
+			buf := conn.DrainLoadSessionReplay(context.Background())
 
 			// Accumulate blocks across notifications, splitting on role boundaries.
 			var blocks []model.ContentBlock
@@ -381,6 +373,10 @@ func ServeACPLoadSession(w http.ResponseWriter, r *http.Request) {
 			}
 			// Flush remaining blocks
 			flushBlocks()
+		} else {
+			// No client means there can be no replay to persist. Still close the
+			// capture boundary so a later prompt is not swallowed indefinitely.
+			conn.ClearLoadSessionActive()
 		}
 
 		// Batch insert replay messages to chat_history
