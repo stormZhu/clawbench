@@ -1256,6 +1256,9 @@ const filteredEntries = computed(() => {
 const hasMoreEntries = computed(() => filteredEntries.value.length > MAX_VISIBLE_ENTRIES)
 const visibleEntries = computed(() => filteredEntries.value.slice(0, MAX_VISIBLE_ENTRIES))
 
+let lastClickTime = 0
+let lastClickPath = ''
+
 function handleItemClick(e) {
     if (props.dirLoading) return
     const item = e.target.closest('.file-item, .grid-item')
@@ -1286,9 +1289,16 @@ function handleItemClick(e) {
         return
     }
 
+    const now = Date.now()
+    const isDoubleClick = (now - lastClickTime < 400) && (lastClickPath === path)
+    lastClickTime = now
+    lastClickPath = path
+
     selectedPath.value = path
-    // PC: single click only selects — opening requires a double-click (or Enter).
-    if (isPC.value) return
+    // PC wide-screen (CSS width >= 1024 with mouse): single click only selects — opening requires double-click.
+    // On mobile / narrow-screen (CSS width < 1024) or touch: single click directly opens the item.
+    const isNarrow = typeof window !== 'undefined' ? window.innerWidth < 1024 : !isWideScreen.value
+    if (isPC.value && !isNarrow && isWideScreen.value && !isDoubleClick) return
     openItem(action, path)
 }
 

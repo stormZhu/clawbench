@@ -10,6 +10,7 @@ vi.setConfig({ testTimeout: 60_000 })
 import { nextTick, reactive, ref, computed, readonly, defineComponent } from 'vue'
 import { createI18n } from 'vue-i18n'
 import FileManagerContent from '@/components/file/FileManagerContent.vue'
+import { _setWideScreenForTest } from '@/composables/useWideScreenLayout'
 // jsdom does not implement CSS.escape (used by scrollToEntryAndSelect). Polyfill it.
 const cssGlobal = globalThis as unknown as { CSS?: { escape?: (v: string) => string } }
 if (typeof cssGlobal.CSS === 'undefined') {
@@ -484,6 +485,32 @@ describe('FileManagerContent — handleItemClick', () => {
     const fileItems = wrapper.findAll('.file-item:not(.dir-item)')
     await fileItems[0].trigger('dblclick')
 
+    expect(wrapper.emitted('selectFile')).toBeTruthy()
+  })
+
+  it('narrow-screen / mobile: emits selectFile on single click even when isPC is true', async () => {
+    mockIsPC.value = true
+    _setWideScreenForTest(false)
+    try {
+      const wrapper = mountContent()
+      const fileItems = wrapper.findAll('.file-item:not(.dir-item)')
+      await fileItems[0].trigger('click')
+
+      expect(wrapper.emitted('selectFile')).toBeTruthy()
+    } finally {
+      _setWideScreenForTest(true)
+    }
+  })
+
+  it('PC: consecutive clicks within 400ms acts as double-click and emits selectFile', async () => {
+    mockIsPC.value = true
+    _setWideScreenForTest(true)
+    const wrapper = mountContent()
+    const fileItems = wrapper.findAll('.file-item:not(.dir-item)')
+    await fileItems[0].trigger('click')
+    expect(wrapper.emitted('selectFile')).toBeFalsy()
+
+    await fileItems[0].trigger('click')
     expect(wrapper.emitted('selectFile')).toBeTruthy()
   })
 
