@@ -461,6 +461,7 @@ func (c *ClawBenchACPClient) RequestPermission(ctx context.Context, p acp.Reques
 		// clawbenchSID is immutable after construction, safe to read without lock.
 		csid := c.connRef.clawbenchSID
 		onPermissionStateChange(csid, true, toolName, toolInput)
+		c.connRef.SetToolInFlight(true)
 	}
 
 	// Block until user responds or context is cancelled
@@ -475,6 +476,7 @@ func (c *ClawBenchACPClient) RequestPermission(ctx context.Context, p acp.Reques
 			// clawbenchSID is immutable after construction, safe to read without lock.
 			csid := c.connRef.clawbenchSID
 			onPermissionStateChange(csid, false, "", "")
+			c.connRef.SetToolInFlight(false)
 		}
 
 		// Emit tool_result to mark the PermissionApproval as done
@@ -499,6 +501,11 @@ func (c *ClawBenchACPClient) RequestPermission(ctx context.Context, p acp.Reques
 		c.mu.Lock()
 		delete(c.pendingPermission, key)
 		c.mu.Unlock()
+		if c.connRef != nil {
+			csid := c.connRef.clawbenchSID
+			onPermissionStateChange(csid, false, "", "")
+			c.connRef.SetToolInFlight(false)
+		}
 		return acp.RequestPermissionResponse{
 			Outcome: acp.NewRequestPermissionOutcomeCancelled(),
 		}, ctx.Err()

@@ -776,6 +776,8 @@ func executeStreamRun(
 		result.err = "AI response timed out (30 min)"
 	} else if runResult.Empty {
 		result.empty = true
+	} else if !runResult.ReceivedTerminal && runResult.CancelReason == "" {
+		result.err = "AI backend process terminated unexpectedly"
 	}
 
 	slog.Info(

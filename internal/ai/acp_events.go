@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 )
@@ -812,12 +813,38 @@ func mapACPError(code int, message string) StreamEvent {
 	}
 }
 
-// forwardACPEvent sends a StreamEvent to the channel with non-blocking send.
-// Used by ACP event mapping to avoid blocking the SDK's internal goroutine.
+// isCriticalACPEvent returns whether an event must not be dropped under channel load.
+func isCriticalACPEvent(eventType string) bool {
+	switch eventType {
+	case "error", "warning", "done", "content_reset":
+		return true
+	default:
+		return false
+	}
+}
+
+// forwardACPEvent sends a StreamEvent to the channel.
+// Critical control events (error, warning, done, content_reset) use a bounded
+// delivery timeout so they are never silently dropped when the channel buffer
+// is momentarily full. Non-critical deltas use non-blocking send.
 // Recovers from send-on-closed-channel: the ACP SDK's internal goroutines may
 // outlive the channel close in ExecuteStream (e.g., on context cancellation),
 // so a panic from sending to a closed channel is safe to ignore.
 func forwardACPEvent(ch chan<- StreamEvent, event StreamEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Debug("acp: send on closed stream channel, ignoring", "type", event.Type)
+		}
+	}()
+	if isCriticalACPEvent(event.Type) {
+		select {
+		case ch <- event:
+			return
+		case <-time.After(2 * time.Second):
+			slog.Error("acp: failed to deliver critical stream event within timeout", "type", event.Type)
+			return
+		}
+	}
 	emitStreamEvent(ch, "acp", event)
 }
 

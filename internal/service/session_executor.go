@@ -965,6 +965,8 @@ func (e *SessionExecutor) buildContentJSON(blocks []model.ContentBlock, result R
 		contentMap["cancelled"] = true
 	} else if e.ctx.Err() == context.DeadlineExceeded {
 		blocks = append(blocks, model.ContentBlock{Type: blockTypeWarning, Text: "AI response timed out (30 min)", Reason: ai.ReasonTimeout})
+	} else if !result.ReceivedTerminal && result.CancelReason == "" {
+		blocks = append(blocks, model.ContentBlock{Type: blockTypeWarning, Text: "AI response was interrupted (backend process exited unexpectedly)", Reason: ai.ReasonBackendExit})
 	}
 	contentMap[contentKeyBlocks] = blocks
 	blocksJSON, _ := json.Marshal(contentMap)

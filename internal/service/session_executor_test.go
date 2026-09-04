@@ -2037,6 +2037,45 @@ func TestSessionExecutor_BuildContentJSON_WithBlocks_ContextCancel(t *testing.T)
 	}
 }
 
+func TestSessionExecutor_BuildContentJSON_WithBlocks_Interrupted(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	ctx := context.Background()
+
+	cfg := RunConfig{
+		Mode:        ModeInteractive,
+		ProjectPath: "/test",
+		BackendName: "test",
+		SessionID:   sid,
+		AgentID:     "test-agent",
+		ChatRequest: ai.ChatRequest{Prompt: "hello"},
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+
+	blocks := []model.ContentBlock{{Type: "text", Text: "partial output"}}
+	result := RunResult{ReceivedTerminal: false, CancelReason: ""}
+	meta := &ai.Metadata{}
+
+	contentJSON, outBlocks := executor.buildContentJSON(blocks, result, meta)
+	if !strings.Contains(contentJSON, "AI response was interrupted (backend process exited unexpectedly)") {
+		t.Fatalf("expected interruption warning in contentJSON, got: %s", contentJSON)
+	}
+	if len(outBlocks) != 2 {
+		t.Fatalf("expected 2 blocks, got: %d", len(outBlocks))
+	}
+	if outBlocks[1].Type != "warning" {
+		t.Fatalf("expected warning block, got: %s", outBlocks[1].Type)
+	}
+	if outBlocks[1].Reason != ai.ReasonBackendExit {
+		t.Fatalf("expected ReasonBackendExit, got: %s", outBlocks[1].Reason)
+	}
+}
+
 func TestSessionExecutor_Finalize_FinalizeStreamingMessageError(t *testing.T) {
 	// Cover lines 536-540: Finalize when FinalizeStreamingMessage fails.
 	setupExecutorDB(t)

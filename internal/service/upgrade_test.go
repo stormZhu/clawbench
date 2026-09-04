@@ -75,18 +75,16 @@ func TestGetRegistryBase_NonChina(t *testing.T) {
 // --- getUserRegistryBase / parseNpmRcRegistry ---
 
 func TestGetUserRegistryBase_EnvVar(t *testing.T) {
-	orig := os.Getenv("NPM_CONFIG_REGISTRY")
-	defer os.Setenv("NPM_CONFIG_REGISTRY", orig)
-	os.Setenv("NPM_CONFIG_REGISTRY", "https://registry.example.com")
+	t.Setenv("NPM_CONFIG_REGISTRY", "https://registry.example.com")
+	t.Setenv("npm_config_registry", "")
 
 	got := getUserRegistryBase()
 	assert.Equal(t, "https://registry.example.com", got)
 }
 
 func TestGetUserRegistryBase_EnvVarLowercase(t *testing.T) {
-	orig := os.Getenv("npm_config_registry")
-	defer os.Setenv("npm_config_registry", orig)
-	os.Setenv("npm_config_registry", "https://registry.example.com/")
+	t.Setenv("NPM_CONFIG_REGISTRY", "")
+	t.Setenv("npm_config_registry", "https://registry.example.com/")
 
 	// Trailing slash should be trimmed.
 	got := getUserRegistryBase()
@@ -94,9 +92,8 @@ func TestGetUserRegistryBase_EnvVarLowercase(t *testing.T) {
 }
 
 func TestGetUserRegistryBase_EnvVarPriorityOverNpmrc(t *testing.T) {
-	orig := os.Getenv("NPM_CONFIG_REGISTRY")
-	defer os.Setenv("NPM_CONFIG_REGISTRY", orig)
-	os.Setenv("NPM_CONFIG_REGISTRY", "https://env.example.com")
+	t.Setenv("NPM_CONFIG_REGISTRY", "https://env.example.com")
+	t.Setenv("npm_config_registry", "")
 
 	// A valid .npmrc registry exists but env var should win.
 	withTempHome(t)
@@ -106,9 +103,8 @@ func TestGetUserRegistryBase_EnvVarPriorityOverNpmrc(t *testing.T) {
 }
 
 func TestGetUserRegistryBase_InvalidEnvVarIgnored(t *testing.T) {
-	orig := os.Getenv("NPM_CONFIG_REGISTRY")
-	defer os.Setenv("NPM_CONFIG_REGISTRY", orig)
-	os.Setenv("NPM_CONFIG_REGISTRY", "default")
+	t.Setenv("NPM_CONFIG_REGISTRY", "default")
+	t.Setenv("npm_config_registry", "")
 
 	// Should fall through to .npmrc, not return the invalid value.
 	withTempHome(t)
@@ -118,6 +114,8 @@ func TestGetUserRegistryBase_InvalidEnvVarIgnored(t *testing.T) {
 }
 
 func TestGetUserRegistryBase_FromNpmRc(t *testing.T) {
+	t.Setenv("NPM_CONFIG_REGISTRY", "")
+	t.Setenv("npm_config_registry", "")
 	withTempHome(t)
 	writeNpmRc(t, "registry=https://registry.npmmirror.com\n")
 
@@ -126,12 +124,16 @@ func TestGetUserRegistryBase_FromNpmRc(t *testing.T) {
 }
 
 func TestGetUserRegistryBase_NoNpmrc(t *testing.T) {
+	t.Setenv("NPM_CONFIG_REGISTRY", "")
+	t.Setenv("npm_config_registry", "")
 	withTempHome(t)
 
 	assert.Equal(t, "", getUserRegistryBase())
 }
 
 func TestGetUserRegistryBase_CommentedNpmrc(t *testing.T) {
+	t.Setenv("NPM_CONFIG_REGISTRY", "")
+	t.Setenv("npm_config_registry", "")
 	withTempHome(t)
 	writeNpmRc(t, "# registry=https://ignored.example.com\n")
 

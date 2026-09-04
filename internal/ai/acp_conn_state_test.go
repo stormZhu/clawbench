@@ -827,6 +827,12 @@ func TestIsACPPeerDisconnected_RequestErrorWithOtherData(t *testing.T) {
 	assert.False(t, isACPPeerDisconnected(reqErr))
 }
 
+func TestIsACPPeerDisconnected_ProcessExitSignals(t *testing.T) {
+	assert.True(t, isACPPeerDisconnected(fmt.Errorf("read: EOF")), "EOF should trigger disconnect retry")
+	assert.True(t, isACPPeerDisconnected(fmt.Errorf("signal: killed")), "signal: killed should trigger disconnect retry")
+	assert.True(t, isACPPeerDisconnected(fmt.Errorf("exit status 1")), "exit status should trigger disconnect retry")
+}
+
 func TestIsACPPeerDisconnected_CancelledContext(t *testing.T) {
 	// context.Canceled should NOT be treated as peer disconnect
 	assert.False(t, isACPPeerDisconnected(context.Canceled))

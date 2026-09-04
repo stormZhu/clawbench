@@ -305,7 +305,10 @@ func isACPPeerDisconnected(err error) bool {
 // process died or the connection pipe broke.
 func isPeerDisconnectMsg(msg string) bool {
 	return strings.Contains(msg, "peer disconnected") ||
-		strings.Contains(msg, "broken pipe")
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "EOF") ||
+		strings.Contains(msg, "signal: killed") ||
+		strings.Contains(msg, "exit status")
 }
 
 // isACPDeadlineMsg checks whether an error message indicates a context

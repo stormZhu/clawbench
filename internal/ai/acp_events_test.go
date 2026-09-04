@@ -1550,3 +1550,29 @@ func TestMapACPSessionUpdate_UsageUpdate_WithoutCost(t *testing.T) {
 	}
 	assert.True(t, foundUsage, "usage_update event not found")
 }
+
+func TestIsCriticalACPEvent(t *testing.T) {
+	assert.True(t, isCriticalACPEvent("error"))
+	assert.True(t, isCriticalACPEvent("warning"))
+	assert.True(t, isCriticalACPEvent("done"))
+	assert.True(t, isCriticalACPEvent("content_reset"))
+	assert.False(t, isCriticalACPEvent("content"))
+	assert.False(t, isCriticalACPEvent("thinking"))
+	assert.False(t, isCriticalACPEvent("tool_use"))
+}
+
+func TestForwardACPEvent_CriticalDelivery(t *testing.T) {
+	ch := make(chan StreamEvent, 1)
+	ch <- StreamEvent{Type: "content", Content: "filler"}
+	done := make(chan struct{})
+	go func() {
+		forwardACPEvent(ch, StreamEvent{Type: "error", Error: "fatal"})
+		close(done)
+	}()
+	// Drain the filler so the critical event can be delivered
+	<-ch
+	<-done
+	errEvt := <-ch
+	assert.Equal(t, "error", errEvt.Type)
+	assert.Equal(t, "fatal", errEvt.Error)
+}
