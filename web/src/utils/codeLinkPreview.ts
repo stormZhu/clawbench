@@ -129,13 +129,17 @@ export function getUtf8ByteLength(str: string): number {
 export interface SliceCodeOptions {
   /** Number of expansion steps (+1 expands 5 lines up/down or 10 lines downward) */
   contextExpansion?: number
+  /** Additional lines to expand upward beyond the default context */
+  expandAboveLines?: number
+  /** Additional lines to expand downward beyond the default context */
+  expandBelowLines?: number
 }
 
 /**
  * Slice file content for preview with real line numbers, context, and hard resource limits.
  *
  * Slicing constraints:
- * - When target line is given: show [start - 3, end + 3], clamped to file.
+ * - When target line is given: show [start - 30, end + 30], clamped to file.
  * - When no target line: show first 30 lines.
  * - When lineStart > totalLines: show last up to 30 lines and mark lineOutOfRange = true.
  * - Hard limit MAX_RENDER_LINES (200 lines).
@@ -166,6 +170,8 @@ export function sliceCodeForPreview(
 
   const { start: reqStart, end: reqEnd, hasExplicitRange } = normalizePreviewRange(lineStart, lineEnd)
   const expansion = Math.max(0, options.contextExpansion ?? 0)
+  const extraAbove = Math.max(0, options.expandAboveLines ?? 0)
+  const extraBelow = Math.max(0, options.expandBelowLines ?? 0)
 
   let startLine: number
   let endLine: number
@@ -187,6 +193,8 @@ export function sliceCodeForPreview(
       highlightEnd = Math.min(reqEnd, totalLines)
 
       const contextLines = DEFAULT_CONTEXT + expansion * 5
+      const contextAbove = contextLines + extraAbove
+      const contextBelow = contextLines + extraBelow
       const targetSpan = highlightEnd - highlightStart + 1
 
       // If target range itself exceeds MAX_RENDER_LINES, start at highlightStart
@@ -196,33 +204,42 @@ export function sliceCodeForPreview(
         renderTruncated = true
         truncateReason = 'lines'
       } else {
-        const windowSize = Math.min(MAX_RENDER_LINES, targetSpan + contextLines * 2)
-        let start = Math.max(1, highlightStart - contextLines)
-        let end = Math.min(totalLines, highlightEnd + contextLines)
+        let start = Math.max(1, highlightStart - contextAbove)
+        let end = Math.min(totalLines, highlightEnd + contextBelow)
 
-        // If top clamped to 1, expand bottom as much as possible up to windowSize
-        if (start === 1) {
-          end = Math.min(totalLines, start + windowSize - 1)
+        // Only do initial symmetrical redistribution if user hasn't explicitly used directional expansion
+        if (extraAbove === 0 && extraBelow === 0) {
+          const windowSize = Math.min(MAX_RENDER_LINES, targetSpan + contextLines * 2)
+          // If top clamped to 1, expand bottom as much as possible up to windowSize
+          if (start === 1) {
+            end = Math.min(totalLines, start + windowSize - 1)
+          }
+          // If bottom clamped to totalLines, expand top as much as possible up to windowSize
+          if (end === totalLines) {
+            start = Math.max(1, end - windowSize + 1)
+          }
         }
-        // If bottom clamped to totalLines, expand top as much as possible up to windowSize
-        if (end === totalLines) {
-          start = Math.max(1, end - windowSize + 1)
+
+        if (end - start + 1 > MAX_RENDER_LINES) {
+          end = start + MAX_RENDER_LINES - 1
+          renderTruncated = true
+          truncateReason = 'lines'
         }
 
         startLine = start
         endLine = end
-        if (endLine - startLine + 1 > MAX_RENDER_LINES) {
-          endLine = startLine + MAX_RENDER_LINES - 1
-          renderTruncated = true
-          truncateReason = 'lines'
-        }
       }
     }
   } else {
     // No explicit range: show from line 1
-    const count = Math.min(totalLines, DEFAULT_NO_RANGE_LINES + expansion * 10)
+    const count = Math.min(totalLines, DEFAULT_NO_RANGE_LINES + expansion * 10 + extraBelow)
     startLine = 1
     endLine = count
+    if (endLine - startLine + 1 > MAX_RENDER_LINES) {
+      endLine = startLine + MAX_RENDER_LINES - 1
+      renderTruncated = true
+      truncateReason = 'lines'
+    }
   }
 
   const renderedLines: string[] = []

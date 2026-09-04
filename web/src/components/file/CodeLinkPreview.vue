@@ -21,8 +21,21 @@
 
       <!-- Action buttons -->
       <div class="code-preview-sheet-actions">
-        <button class="code-preview-btn" @click="handleCopy">
-          {{ copied ? t('file.codePreview.copied') : t('file.codePreview.copy') }}
+        <button
+          class="code-preview-btn"
+          :class="{ 'is-copied': copied }"
+          :title="copied ? t('file.codePreview.copied') : t('file.codePreview.copy')"
+          :aria-label="copied ? t('file.codePreview.copied') : t('file.codePreview.copy')"
+          @click="handleCopy"
+        >
+          <svg v-if="copied" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+          <span>{{ copied ? t('file.codePreview.copied') : t('file.codePreview.copy') }}</span>
         </button>
         <button
           class="code-preview-btn"
@@ -30,16 +43,6 @@
           @click="toggleWordWrap"
         >
           {{ isWordWrap ? t('file.codePreview.unwrap') : t('file.codePreview.wrap') }}
-        </button>
-        <button class="code-preview-btn" @click="preview.expandContext()">
-          {{ t('file.codePreview.expand') }}
-        </button>
-        <button
-          class="code-preview-btn"
-          :disabled="preview.contextExpansion.value <= 0"
-          @click="preview.shrinkContext()"
-        >
-          {{ t('file.codePreview.shrink') }}
         </button>
         <button class="code-preview-btn" @click="preview.refresh()">
           {{ t('file.codePreview.refresh') }}
@@ -76,6 +79,40 @@
           class="code-preview-scroll"
           :class="{ 'is-word-wrap': isWordWrap }"
         >
+          <!-- Top Expand Bar -->
+          <div
+            v-if="canExpandAbove"
+            class="code-preview-expand-bar expand-above"
+            role="region"
+            :aria-label="t('file.codePreview.expandAbove', { n: stepAbove })"
+          >
+            <button
+              type="button"
+              class="code-preview-expand-btn"
+              :title="t('file.codePreview.expandAbove', { n: stepAbove })"
+              @click="handleExpandAbove(stepAbove)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="18 15 12 9 6 15" />
+              </svg>
+              <span>{{ t('file.codePreview.expandAbove', { n: stepAbove }) }}</span>
+              <span class="code-preview-expand-hint">({{ t('file.codePreview.linesRemaining', { n: remainingAbove }) }})</span>
+            </button>
+            <button
+              v-if="remainingAbove > stepAbove"
+              type="button"
+              class="code-preview-expand-btn expand-all"
+              :title="t('file.codePreview.expandToTop')"
+              @click="handleExpandAbove(remainingAbove)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="17 11 12 6 7 11" />
+                <polyline points="17 18 12 13 7 18" />
+              </svg>
+              <span>{{ t('file.codePreview.expandToTop') }}</span>
+            </button>
+          </div>
+
           <div class="code-preview-lines">
             <div
               v-for="line in codeLines"
@@ -94,6 +131,40 @@
                 <code class="hljs" v-html="line.html || '&nbsp;'" />
               </div>
             </div>
+          </div>
+
+          <!-- Bottom Expand Bar -->
+          <div
+            v-if="canExpandBelow"
+            class="code-preview-expand-bar expand-below"
+            role="region"
+            :aria-label="t('file.codePreview.expandBelow', { n: stepBelow })"
+          >
+            <button
+              type="button"
+              class="code-preview-expand-btn"
+              :title="t('file.codePreview.expandBelow', { n: stepBelow })"
+              @click="handleExpandBelow(stepBelow)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+              <span>{{ t('file.codePreview.expandBelow', { n: stepBelow }) }}</span>
+              <span class="code-preview-expand-hint">({{ t('file.codePreview.linesRemaining', { n: remainingBelow }) }})</span>
+            </button>
+            <button
+              v-if="remainingBelow > stepBelow"
+              type="button"
+              class="code-preview-expand-btn expand-all"
+              :title="t('file.codePreview.expandToBottom')"
+              @click="handleExpandBelow(remainingBelow)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="7 13 12 18 17 13" />
+                <polyline points="7 6 12 11 17 6" />
+              </svg>
+              <span>{{ t('file.codePreview.expandToBottom') }}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -128,28 +199,18 @@
           <button
             ref="firstActionBtnRef"
             class="code-preview-btn"
-            :title="t('file.codePreview.copy')"
-            :aria-label="t('file.codePreview.copy')"
+            :class="{ 'is-copied': copied }"
+            :title="copied ? t('file.codePreview.copied') : t('file.codePreview.copy')"
+            :aria-label="copied ? t('file.codePreview.copied') : t('file.codePreview.copy')"
             @click="handleCopy"
           >
-            {{ copied ? t('file.codePreview.copied') : t('file.codePreview.copy') }}
-          </button>
-          <button
-            class="code-preview-btn"
-            :title="t('file.codePreview.expand')"
-            :aria-label="t('file.codePreview.expand')"
-            @click="preview.expandContext()"
-          >
-            +5
-          </button>
-          <button
-            class="code-preview-btn"
-            :disabled="preview.contextExpansion.value <= 0"
-            :title="t('file.codePreview.shrink')"
-            :aria-label="t('file.codePreview.shrink')"
-            @click="preview.shrinkContext()"
-          >
-            -5
+            <svg v-if="copied" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
           </button>
           <button
             class="code-preview-btn"
@@ -262,6 +323,40 @@
           class="code-preview-scroll"
           :class="{ 'is-word-wrap': isWordWrap }"
         >
+          <!-- Top Expand Bar -->
+          <div
+            v-if="canExpandAbove"
+            class="code-preview-expand-bar expand-above"
+            role="region"
+            :aria-label="t('file.codePreview.expandAbove', { n: stepAbove })"
+          >
+            <button
+              type="button"
+              class="code-preview-expand-btn"
+              :title="t('file.codePreview.expandAbove', { n: stepAbove })"
+              @click="handleExpandAbove(stepAbove)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="18 15 12 9 6 15" />
+              </svg>
+              <span>{{ t('file.codePreview.expandAbove', { n: stepAbove }) }}</span>
+              <span class="code-preview-expand-hint">({{ t('file.codePreview.linesRemaining', { n: remainingAbove }) }})</span>
+            </button>
+            <button
+              v-if="remainingAbove > stepAbove"
+              type="button"
+              class="code-preview-expand-btn expand-all"
+              :title="t('file.codePreview.expandToTop')"
+              @click="handleExpandAbove(remainingAbove)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="17 11 12 6 7 11" />
+                <polyline points="17 18 12 13 7 18" />
+              </svg>
+              <span>{{ t('file.codePreview.expandToTop') }}</span>
+            </button>
+          </div>
+
           <div class="code-preview-lines">
             <div
               v-for="line in codeLines"
@@ -280,6 +375,40 @@
                 <code class="hljs" v-html="line.html || '&nbsp;'" />
               </div>
             </div>
+          </div>
+
+          <!-- Bottom Expand Bar -->
+          <div
+            v-if="canExpandBelow"
+            class="code-preview-expand-bar expand-below"
+            role="region"
+            :aria-label="t('file.codePreview.expandBelow', { n: stepBelow })"
+          >
+            <button
+              type="button"
+              class="code-preview-expand-btn"
+              :title="t('file.codePreview.expandBelow', { n: stepBelow })"
+              @click="handleExpandBelow(stepBelow)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+              <span>{{ t('file.codePreview.expandBelow', { n: stepBelow }) }}</span>
+              <span class="code-preview-expand-hint">({{ t('file.codePreview.linesRemaining', { n: remainingBelow }) }})</span>
+            </button>
+            <button
+              v-if="remainingBelow > stepBelow"
+              type="button"
+              class="code-preview-expand-btn expand-all"
+              :title="t('file.codePreview.expandToBottom')"
+              @click="handleExpandBelow(remainingBelow)"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="7 13 12 18 17 13" />
+                <polyline points="7 6 12 11 17 6" />
+              </svg>
+              <span>{{ t('file.codePreview.expandToBottom') }}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -398,6 +527,61 @@ const codeLines = computed<FormattedCodeLine[]>(() => {
   }
   return result
 })
+
+const remainingAbove = computed(() => {
+  const sliced = props.preview.slicedCode.value
+  if (!sliced) return 0
+  return Math.max(0, sliced.startLine - 1)
+})
+
+const remainingBelow = computed(() => {
+  const sliced = props.preview.slicedCode.value
+  if (!sliced) return 0
+  return Math.max(0, sliced.totalLines - sliced.endLine)
+})
+
+const canExpandAbove = computed(() => remainingAbove.value > 0)
+const canExpandBelow = computed(() => remainingBelow.value > 0)
+
+const stepAbove = computed(() => Math.min(10, remainingAbove.value))
+const stepBelow = computed(() => Math.min(10, remainingBelow.value))
+
+let isDirectionalExpanding = false
+
+const handleExpandAbove = async (lines: number) => {
+  const scrollEl = scrollPaneRef.value || sheetScrollRef.value
+  const oldScrollHeight = scrollEl ? scrollEl.scrollHeight : 0
+  const oldScrollTop = scrollEl ? scrollEl.scrollTop : 0
+
+  isDirectionalExpanding = true
+  try {
+    props.preview.expandAbove(lines)
+    await nextTick()
+
+    if (scrollEl) {
+      const deltaHeight = scrollEl.scrollHeight - oldScrollHeight
+      if (deltaHeight > 0) {
+        scrollEl.scrollTop = oldScrollTop + deltaHeight
+      }
+    }
+  } finally {
+    nextTick(() => {
+      isDirectionalExpanding = false
+    })
+  }
+}
+
+const handleExpandBelow = async (lines: number) => {
+  isDirectionalExpanding = true
+  try {
+    props.preview.expandBelow(lines)
+    await nextTick()
+  } finally {
+    nextTick(() => {
+      isDirectionalExpanding = false
+    })
+  }
+}
 
 const getRelativeOffsetTop = (child: HTMLElement, parent: HTMLElement): number => {
   let top = 0
@@ -639,6 +823,7 @@ watch(
 watch(
   codeLines,
   () => {
+    if (isDirectionalExpanding) return
     if (props.preview.visible.value && props.preview.status.value === 'ready') {
       scrollToTargetLine()
     }

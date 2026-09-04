@@ -46,6 +46,11 @@ const i18n = createI18n({
           close: 'Close preview',
           expand: 'Expand context (+5)',
           shrink: 'Shrink context (-5)',
+          expandAbove: 'Expand {n} lines above',
+          expandBelow: 'Expand {n} lines below',
+          expandToTop: 'Expand to top',
+          expandToBottom: 'Expand to bottom',
+          linesRemaining: '{n} lines remaining',
           wrap: 'Wrap lines',
           unwrap: 'Unwrap lines',
           loading: 'Loading code...',
@@ -143,6 +148,10 @@ function createMockPreviewController(overrides: Partial<ReturnType<typeof useCod
     refresh: vi.fn(),
     expandContext: vi.fn(),
     shrinkContext: vi.fn(),
+    expandAbove: vi.fn(),
+    expandBelow: vi.fn(),
+    expandToTop: vi.fn(),
+    expandToBottom: vi.fn(),
     openFull: vi.fn(),
     onCardPointerEnter: vi.fn(),
     onCardPointerLeave: vi.fn(),
@@ -333,9 +342,19 @@ describe('CodeLinkPreview.vue', () => {
     expect(anchor.focus).toHaveBeenCalled()
   })
 
-  it('triggers context expansion and shrinking on button clicks', async () => {
+  it('renders top and bottom expand bars and triggers directional expansion', async () => {
     const preview = createMockPreviewController({
-      contextExpansion: ref(1),
+      status: ref('ready'),
+      slicedCode: ref({
+        code: 'line 20\nline 21',
+        startLine: 20,
+        endLine: 21,
+        totalLines: 100,
+        highlightStart: 20,
+        highlightEnd: 20,
+        lineOutOfRange: false,
+        renderTruncated: false,
+      }),
     })
 
     mount(CodeLinkPreview, {
@@ -344,17 +363,17 @@ describe('CodeLinkPreview.vue', () => {
     })
 
     const floating = document.querySelector('.code-link-preview-floating') as HTMLElement
-    const expandBtn = floating.querySelector('button[title="Expand context (+5)"]') as HTMLButtonElement
-    const shrinkBtn = floating.querySelector('button[title="Shrink context (-5)"]') as HTMLButtonElement
+    const expandAboveBtn = floating.querySelector('.code-preview-expand-bar.expand-above .code-preview-expand-btn') as HTMLButtonElement
+    const expandBelowBtn = floating.querySelector('.code-preview-expand-bar.expand-below .code-preview-expand-btn') as HTMLButtonElement
 
-    expect(expandBtn).not.toBeNull()
-    expect(shrinkBtn).not.toBeNull()
+    expect(expandAboveBtn).not.toBeNull()
+    expect(expandBelowBtn).not.toBeNull()
 
-    expandBtn.click()
-    expect(preview.expandContext).toHaveBeenCalled()
+    expandAboveBtn.click()
+    expect(preview.expandAbove).toHaveBeenCalledWith(10)
 
-    shrinkBtn.click()
-    expect(preview.shrinkContext).toHaveBeenCalled()
+    expandBelowBtn.click()
+    expect(preview.expandBelow).toHaveBeenCalledWith(10)
   })
 
   it('supports header dragging with pointer events', () => {

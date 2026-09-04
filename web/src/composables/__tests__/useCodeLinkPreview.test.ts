@@ -383,6 +383,43 @@ describe('useCodeLinkPreview', () => {
     expect(preview.contextExpansion.value).toBe(0)
   })
 
+  it('supports directional expandAbove, expandBelow, expandToTop, and expandToBottom', async () => {
+    mockApiGet.mockResolvedValueOnce({
+      content: Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n'),
+      name: 'code.ts',
+      path: 'code.ts',
+      supported: true,
+      size: 500,
+    })
+
+    const preview = useCodeLinkPreview()
+    preview.showPreview({ filePath: 'code.ts', lineStart: 100, lineEnd: 100 })
+    await vi.runAllTicks()
+    await Promise.resolve()
+
+    // Default context 30 lines: [70, 130]
+    expect(preview.slicedCode.value?.startLine).toBe(70)
+    expect(preview.slicedCode.value?.endLine).toBe(130)
+
+    // Expand above by 10 lines -> startLine 60
+    preview.expandAbove(10)
+    expect(preview.slicedCode.value?.startLine).toBe(60)
+    expect(preview.slicedCode.value?.endLine).toBe(130)
+
+    // Expand below by 15 lines -> endLine 145
+    preview.expandBelow(15)
+    expect(preview.slicedCode.value?.startLine).toBe(60)
+    expect(preview.slicedCode.value?.endLine).toBe(145)
+
+    // Expand to top -> startLine 1
+    preview.expandToTop()
+    expect(preview.slicedCode.value?.startLine).toBe(1)
+
+    // Expand to bottom -> endLine 200 (clamped by MAX_RENDER_LINES=200 from startLine 1)
+    preview.expandToBottom()
+    expect(preview.slicedCode.value?.endLine).toBe(200)
+  })
+
   it('handles card hover and focus events', async () => {
     mockApiGet.mockResolvedValueOnce({
       content: 'hello world',

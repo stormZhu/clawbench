@@ -153,6 +153,20 @@ describe('codeLinkPreview utils', () => {
       expect(noRangeExp.startLine).toBe(1)
       expect(noRangeExp.endLine).toBe(40)
     })
+
+    it('supports directional expansion (expandAboveLines and expandBelowLines)', () => {
+      const twoHundredLines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n')
+      // Target line 100 -> normally context 30 -> [70, 130]
+      // expandAboveLines: 15 -> startLine 70 - 15 = 55, endLine 130
+      const aboveRes = sliceCodeForPreview(twoHundredLines, 100, 100, { expandAboveLines: 15 })
+      expect(aboveRes.startLine).toBe(55)
+      expect(aboveRes.endLine).toBe(130)
+
+      // expandBelowLines: 20 -> startLine 70, endLine 130 + 20 = 150
+      const belowRes = sliceCodeForPreview(twoHundredLines, 100, 100, { expandBelowLines: 20 })
+      expect(belowRes.startLine).toBe(70)
+      expect(belowRes.endLine).toBe(150)
+    })
   })
 
   describe('splitHighlightedHtml', () => {

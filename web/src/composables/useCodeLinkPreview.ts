@@ -60,6 +60,8 @@ export function useCodeLinkPreview(options: UseCodeLinkPreviewOptions = {}) {
   const errorMessage = ref<string | null>(null)
   const isLargeFile = ref(false)
   const contextExpansion = ref(0)
+  const extraAboveLines = ref(0)
+  const extraBelowLines = ref(0)
   const placement = ref<CardPlacementResult | null>(null)
   const isPinned = computed(() => mode.value === 'pinned')
 
@@ -100,7 +102,11 @@ export function useCodeLinkPreview(options: UseCodeLinkPreviewOptions = {}) {
       fileContent.value.content,
       target.value?.lineStart,
       target.value?.lineEnd,
-      { contextExpansion: contextExpansion.value }
+      {
+        contextExpansion: contextExpansion.value,
+        expandAboveLines: extraAboveLines.value,
+        expandBelowLines: extraBelowLines.value,
+      }
     )
   }
 
@@ -200,6 +206,8 @@ export function useCodeLinkPreview(options: UseCodeLinkPreviewOptions = {}) {
     target.value = newTarget
     mode.value = wasPinned && previewMode !== 'sheet' ? 'pinned' : previewMode
     contextExpansion.value = 0
+    extraAboveLines.value = 0
+    extraBelowLines.value = 0
     visible.value = true
 
     if (mode.value !== 'sheet') {
@@ -227,6 +235,8 @@ export function useCodeLinkPreview(options: UseCodeLinkPreviewOptions = {}) {
     errorMessage.value = null
     isLargeFile.value = false
     contextExpansion.value = 0
+    extraAboveLines.value = 0
+    extraBelowLines.value = 0
     placement.value = null
     mode.value = 'transient'
 
@@ -276,9 +286,39 @@ export function useCodeLinkPreview(options: UseCodeLinkPreviewOptions = {}) {
   }
 
   const shrinkContext = () => {
-    if (contextExpansion.value <= 0) return
-    contextExpansion.value -= 1
+    if (contextExpansion.value <= 0 && extraAboveLines.value <= 0 && extraBelowLines.value <= 0) return
+    if (contextExpansion.value > 0) contextExpansion.value -= 1
+    extraAboveLines.value = Math.max(0, extraAboveLines.value - 5)
+    extraBelowLines.value = Math.max(0, extraBelowLines.value - 5)
     updateSlice()
+  }
+
+  const expandAbove = (count = 10) => {
+    extraAboveLines.value += Math.max(1, count)
+    updateSlice()
+  }
+
+  const expandBelow = (count = 10) => {
+    extraBelowLines.value += Math.max(1, count)
+    updateSlice()
+  }
+
+  const expandToTop = () => {
+    if (!slicedCode.value) return
+    const remaining = Math.max(0, slicedCode.value.startLine - 1)
+    if (remaining > 0) {
+      extraAboveLines.value += remaining
+      updateSlice()
+    }
+  }
+
+  const expandToBottom = () => {
+    if (!slicedCode.value) return
+    const remaining = Math.max(0, slicedCode.value.totalLines - slicedCode.value.endLine)
+    if (remaining > 0) {
+      extraBelowLines.value += remaining
+      updateSlice()
+    }
   }
 
   const openFull = () => {
@@ -514,6 +554,8 @@ export function useCodeLinkPreview(options: UseCodeLinkPreviewOptions = {}) {
     errorMessage,
     isLargeFile,
     contextExpansion,
+    extraAboveLines,
+    extraBelowLines,
     placement,
     showPreview,
     close,
@@ -523,6 +565,10 @@ export function useCodeLinkPreview(options: UseCodeLinkPreviewOptions = {}) {
     refresh,
     expandContext,
     shrinkContext,
+    expandAbove,
+    expandBelow,
+    expandToTop,
+    expandToBottom,
     openFull,
     onCardPointerEnter,
     onCardPointerLeave,
