@@ -101,3 +101,66 @@ _stop_servers() {
         done
     fi
 }
+
+# detect_java_home locates a valid Java 17+ JDK across macOS, Linux, and custom environments.
+# Returns the JAVA_HOME path on stdout and exit code 0 if found, or exit code 1 if not found.
+detect_java_home() {
+    # 1. Use existing JAVA_HOME if valid
+    if [[ -n "${JAVA_HOME:-}" && -d "$JAVA_HOME" && -x "$JAVA_HOME/bin/java" ]]; then
+        echo "$JAVA_HOME"
+        return 0
+    fi
+
+    # 2. macOS: try /usr/libexec/java_home, then Homebrew / Android Studio JBR
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        local jh
+        jh=$(/usr/libexec/java_home -v 17 2>/dev/null || /usr/libexec/java_home 2>/dev/null || true)
+        if [[ -n "$jh" && -d "$jh" && -x "$jh/bin/java" ]]; then
+            echo "$jh"
+            return 0
+        fi
+        for candidate in \
+            "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" \
+            "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home" \
+            "/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" \
+            "/usr/local/opt/openjdk/libexec/openjdk.jdk/Contents/Home" \
+            "/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+            "/Applications/Android Studio.app/Contents/jre/Contents/Home"; do
+            if [[ -d "$candidate" && -x "$candidate/bin/java" ]]; then
+                echo "$candidate"
+                return 0
+            fi
+        done
+    fi
+
+    # 3. Linux: common OpenJDK 17 locations
+    for candidate in \
+        "/usr/lib/jvm/java-17-openjdk-amd64" \
+        "/usr/lib/jvm/java-17-openjdk-arm64" \
+        "/usr/lib/jvm/java-17-openjdk" \
+        "/usr/lib/jvm/default-java"; do
+        if [[ -d "$candidate" && -x "$candidate/bin/java" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    # 4. Fallback: resolve from `java` executable on PATH
+    if command -v java >/dev/null 2>&1; then
+        local java_bin
+        java_bin=$(command -v java)
+        local resolved
+        resolved=$(readlink -f "$java_bin" 2>/dev/null || realpath "$java_bin" 2>/dev/null || true)
+        if [[ -n "$resolved" ]]; then
+            local bin_dir home_dir
+            bin_dir=$(dirname "$resolved")
+            home_dir=$(dirname "$bin_dir")
+            if [[ -d "$home_dir" && -x "$home_dir/bin/java" ]]; then
+                echo "$home_dir"
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
+}

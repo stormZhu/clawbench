@@ -139,7 +139,13 @@ fi
 if [ -n "$BUILD_ANDROID" ]; then
     echo "[2/5] Building Android APK..."
     if [ -d "android" ] && [ -f "android/gradlew" ]; then
-        (cd android && JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew assembleRelease \
+        DETECTED_JAVA_HOME=$(detect_java_home || true)
+        if [ -z "$DETECTED_JAVA_HOME" ]; then
+            echo "ERROR: Java 17+ JDK not found. Please install JDK 17 or set JAVA_HOME." >&2
+            exit 1
+        fi
+        echo "  Using JAVA_HOME: $DETECTED_JAVA_HOME"
+        (cd android && JAVA_HOME="$DETECTED_JAVA_HOME" ./gradlew assembleRelease \
             -PversionCode=$VERSION_CODE -PversionName="$FULL_VERSION") || { echo "ERROR: Android APK build failed" >&2; exit 1; }
         echo "  APK: android/app/build/outputs/apk/release/clawbench-android.apk"
         if [ -f android/app/build/outputs/apk/release/clawbench-android.apk ]; then

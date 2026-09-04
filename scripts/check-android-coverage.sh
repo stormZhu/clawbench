@@ -34,11 +34,14 @@ done
 
 cd "$ROOT_DIR"
 
+source "$SCRIPT_DIR/common.sh"
+
 # Step 1: Run tests with coverage (if not skipped)
 if [ "$SKIP_TEST" = false ]; then
   echo "==> Running Android tests with coverage..."
   cd "$ANDROID_DIR"
-  JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64} ./gradlew jacocoTestReport 2>&1
+  DETECTED_JAVA_HOME=$(detect_java_home || echo "${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}")
+  JAVA_HOME="$DETECTED_JAVA_HOME" ./gradlew jacocoTestReport 2>&1
   cd "$ROOT_DIR"
   echo ""
 else
