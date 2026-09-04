@@ -1,0 +1,277 @@
+import { describe, expect, it, beforeEach, vi } from 'vitest'
+import {
+  normalizePreviewRange,
+  sliceCodeForPreview,
+  buildPreviewUrl,
+  placeNearAnchor,
+  clampCardPosition,
+  CodeLinkPreviewCache,
+  previewCache,
+  MAX_RENDER_LINES,
+  MAX_RENDER_BYTES,
+  MAX_LINE_BYTES,
+} from '@/utils/codeLinkPreview'
+
+// Mock zoom helpers
+vi.mock('@/composables/useSettingsConfig', () => ({
+  toFixedCSS: (val: number) => val,
+  getZoomedViewport: () => ({ width: 1024, height: 768 }),
+}))
+
+describe('codeLinkPreview utils', () => {
+  describe('normalizePreviewRange', () => {
+    it('normalizes single line and ranged lines', () => {
+      expect(normalizePreviewRange(10)).toEqual({ start: 10, end: 10, hasExplicitRange: true })
+      expect(normalizePreviewRange(10, 20)).toEqual({ start: 10, end: 20, hasExplicitRange: true })
+    })
+
+    it('handles inverted ranges by setting end = start', () => {
+      expect(normalizePreviewRange(20, 10)).toEqual({ start: 20, end: 20, hasExplicitRange: true })
+    })
+
+    it('handles non-positive and missing line numbers', () => {
+      expect(normalizePreviewRange()).toEqual({ hasExplicitRange: false })
+      expect(normalizePreviewRange(0)).toEqual({ hasExplicitRange: false })
+      expect(normalizePreviewRange(-5)).toEqual({ hasExplicitRange: false })
+    })
+  })
+
+  describe('sliceCodeForPreview', () => {
+    const sampleCode = [
+      'line 1',
+      'line 2',
+      'line 3',
+      'line 4',
+      'line 5',
+      'line 6',
+      'line 7',
+      'line 8',
+      'line 9',
+      'line 10',
+    ].join('\n')
+
+    it('returns empty slice for empty content', () => {
+      const res = sliceCodeForPreview('')
+      expect(res.code).toBe('')
+      expect(res.totalLines).toBe(0)
+      expect(res.renderTruncated).toBe(false)
+    })
+
+    it('slices with default 30 lines when no line range is given', () => {
+      const res = sliceCodeForPreview(sampleCode)
+      expect(res.startLine).toBe(1)
+      expect(res.endLine).toBe(10)
+      expect(res.totalLines).toBe(10)
+      expect(res.highlightStart).toBeUndefined()
+      expect(res.highlightEnd).toBeUndefined()
+      expect(res.lineOutOfRange).toBe(false)
+      expect(res.renderTruncated).toBe(false)
+    })
+
+    it('slices target line with default 3 context lines', () => {
+      // target line 5 -> [5-3, 5+3] = [2, 8]
+      const res = sliceCodeForPreview(sampleCode, 5)
+      expect(res.startLine).toBe(2)
+      expect(res.endLine).toBe(8)
+      expect(res.highlightStart).toBe(5)
+      expect(res.highlightEnd).toBe(5)
+      expect(res.renderTruncated).toBe(false)
+    })
+
+    it('clamps context lines at file beginning and end', () => {
+      const topRes = sliceCodeForPreview(sampleCode, 2)
+      expect(topRes.startLine).toBe(1)
+      expect(topRes.endLine).toBe(5)
+
+      const bottomRes = sliceCodeForPreview(sampleCode, 9)
+      expect(bottomRes.startLine).toBe(6)
+      expect(bottomRes.endLine).toBe(10)
+    })
+
+    it('supports CRLF and trailing empty line', () => {
+      const crlfCode = 'line 1\r\nline 2\r\nline 3\r\n'
+      const res = sliceCodeForPreview(crlfCode, 2)
+      expect(res.totalLines).toBe(4) // last empty line
+      expect(res.code).toContain('line 2')
+    })
+
+    it('handles lineStart exceeding total lines', () => {
+      const res = sliceCodeForPreview(sampleCode, 999)
+      expect(res.lineOutOfRange).toBe(true)
+      expect(res.startLine).toBe(1)
+      expect(res.endLine).toBe(10)
+      expect(res.highlightStart).toBeUndefined()
+    })
+
+    it('truncates when line count exceeds MAX_RENDER_LINES (200)', () => {
+      const manyLines = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join('\n')
+      const res = sliceCodeForPreview(manyLines, 1, 280)
+      expect(res.renderTruncated).toBe(true)
+      expect(res.truncateReason).toBe('lines')
+      expect(res.endLine - res.startLine + 1).toBe(MAX_RENDER_LINES)
+    })
+
+    it('truncates when total bytes exceed MAX_RENDER_BYTES (512 KiB)', () => {
+      // Create 100 lines each ~10 KiB -> total ~1 MiB
+      const bigLine = 'a'.repeat(10 * 1024)
+      const bigCode = Array.from({ length: 100 }, () => bigLine).join('\n')
+      const res = sliceCodeForPreview(bigCode, 1, 100)
+      expect(res.renderTruncated).toBe(true)
+      expect(res.truncateReason).toBe('bytes')
+    })
+
+    it('truncates when a single line exceeds MAX_LINE_BYTES (128 KiB)', () => {
+      const giantLine = 'x'.repeat(MAX_LINE_BYTES + 1000)
+      const code = ['short line', giantLine, 'after'].join('\n')
+      const res = sliceCodeForPreview(code, 1, 3)
+      expect(res.renderTruncated).toBe(true)
+      expect(res.truncateReason).toBe('line')
+      expect(res.code).toBe('short line')
+    })
+
+    it('supports contextExpansion (+5 lines for range, +10 for no range)', () => {
+      const fiftyLines = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n')
+      // Target line 20 -> context normally 3 -> [17, 23]
+      // Expansion 1 -> context 3 + 5 = 8 -> [12, 28]
+      const expRes = sliceCodeForPreview(fiftyLines, 20, 20, { contextExpansion: 1 })
+      expect(expRes.startLine).toBe(12)
+      expect(expRes.endLine).toBe(28)
+
+      // No range -> normally 30 -> expansion 1 -> 40 lines
+      const noRangeExp = sliceCodeForPreview(fiftyLines, undefined, undefined, { contextExpansion: 1 })
+      expect(noRangeExp.startLine).toBe(1)
+      expect(noRangeExp.endLine).toBe(40)
+    })
+  })
+
+  describe('buildPreviewUrl', () => {
+    it('encodes relative paths', () => {
+      expect(buildPreviewUrl('src/utils/math.ts')).toBe('/api/file/src%2Futils%2Fmath.ts')
+      expect(buildPreviewUrl('utils/math.ts')).toBe('/api/file/utils%2Fmath.ts')
+    })
+
+    it('encodes Unix absolute paths with query param', () => {
+      expect(buildPreviewUrl('/etc/hosts')).toBe('/api/file?path=%2Fetc%2Fhosts')
+    })
+
+    it('encodes Windows absolute paths with query param', () => {
+      expect(buildPreviewUrl('C:\\repo\\file.ts')).toBe('/api/file?path=C%3A%2Frepo%2Ffile.ts')
+      expect(buildPreviewUrl('D:/repo/file.ts')).toBe('/api/file?path=D%3A%2Frepo%2Ffile.ts')
+    })
+  })
+
+  describe('placeNearAnchor & clampCardPosition', () => {
+    const viewport = { width: 1000, height: 800 }
+    const cardWidth = 400
+    const cardHeight = 300
+
+    it('prefers bottom-right quadrant when space is available', () => {
+      const anchorRect = { left: 100, top: 100, right: 200, bottom: 120 }
+      const res = placeNearAnchor(anchorRect, cardWidth, cardHeight, { viewport, edgeMargin: 8, gap: 8 })
+      expect(res.quadrant).toBe('bottom-right')
+      expect(res.viewportX).toBe(100)
+      expect(res.viewportY).toBe(128)
+    })
+
+    it('uses bottom-left quadrant when right side is constrained', () => {
+      const anchorRect = { left: 700, top: 100, right: 950, bottom: 120 }
+      const res = placeNearAnchor(anchorRect, cardWidth, cardHeight, { viewport, edgeMargin: 8, gap: 8 })
+      expect(res.quadrant).toBe('bottom-left')
+      expect(res.viewportX).toBe(950 - cardWidth)
+      expect(res.viewportY).toBe(128)
+    })
+
+    it('uses top-right quadrant when bottom side is constrained', () => {
+      const anchorRect = { left: 100, top: 600, right: 200, bottom: 620 }
+      const res = placeNearAnchor(anchorRect, cardWidth, cardHeight, { viewport, edgeMargin: 8, gap: 8 })
+      expect(res.quadrant).toBe('top-right')
+      expect(res.viewportX).toBe(100)
+      expect(res.viewportY).toBe(600 - 8 - cardHeight)
+    })
+
+    it('clamps card position during drag within viewport bounds', () => {
+      const resLeft = clampCardPosition(-50, 100, cardWidth, cardHeight, viewport)
+      expect(resLeft.viewportX).toBe(8)
+
+      const resRight = clampCardPosition(900, 100, cardWidth, cardHeight, viewport)
+      expect(resRight.viewportX).toBe(viewport.width - cardWidth - 8)
+
+      const resTop = clampCardPosition(100, -20, cardWidth, cardHeight, viewport, 20)
+      expect(resTop.viewportY).toBe(28)
+    })
+  })
+
+  describe('CodeLinkPreviewCache (LRU)', () => {
+    let cache: CodeLinkPreviewCache
+
+    beforeEach(() => {
+      cache = new CodeLinkPreviewCache(3, 10000, 1000, 50000)
+    })
+
+    it('builds canonical keys', () => {
+      expect(cache.buildKey('/root/dir', 'src/file.ts')).toBe('/root/dir::src/file.ts')
+      expect(cache.buildKey('C:\\root', 'src\\file.ts')).toBe('C:/root::src/file.ts')
+    })
+
+    it('sets and gets cached items within TTL', () => {
+      const key = 'test::file.ts'
+      const item = { content: 'hello', name: 'file.ts', path: 'file.ts', supported: true, size: 5 }
+      const success = cache.set(key, item, 1000)
+      expect(success).toBe(true)
+      expect(cache.get(key, 1500)).toMatchObject(item)
+    })
+
+    it('expires items past TTL', () => {
+      const key = 'test::file.ts'
+      const item = { content: 'hello', name: 'file.ts', path: 'file.ts', supported: true, size: 5 }
+      cache.set(key, item, 1000)
+      expect(cache.get(key, 2500)).toBeUndefined()
+    })
+
+    it('does not cache files exceeding largeFileThreshold', () => {
+      const key = 'test::large.ts'
+      const largeItem = { content: 'x', name: 'large.ts', path: 'large.ts', supported: true, size: 60000 }
+      const success = cache.set(key, largeItem)
+      expect(success).toBe(false)
+      expect(cache.get(key)).toBeUndefined()
+    })
+
+    it('evicts least recently used item when maxItems is reached', () => {
+      cache.set('k1', { content: '1', name: '1', path: '1', supported: true, size: 1 }, 1000)
+      cache.set('k2', { content: '2', name: '2', path: '2', supported: true, size: 1 }, 1000)
+      cache.set('k3', { content: '3', name: '3', path: '3', supported: true, size: 1 }, 1000)
+
+      // Access k1 to make it most recently used (order now k2, k3, k1)
+      cache.get('k1', 1100)
+
+      // Insert k4 -> should evict k2
+      cache.set('k4', { content: '4', name: '4', path: '4', supported: true, size: 1 }, 1200)
+
+      expect(cache.get('k2', 1300)).toBeUndefined()
+      expect(cache.get('k1', 1300)).toBeDefined()
+      expect(cache.get('k3', 1300)).toBeDefined()
+      expect(cache.get('k4', 1300)).toBeDefined()
+    })
+
+    it('evicts items when maxBytes is exceeded', () => {
+      const byteCache = new CodeLinkPreviewCache(10, 2000, 10000, 50000)
+      // Each item content of 400 chars has estimatedBytes = 400*2 + 512 = 1312 bytes
+      byteCache.set('b1', { content: 'x'.repeat(400), name: '1', path: '1', supported: true, size: 400 }, 1000)
+      expect(byteCache.size).toBe(1)
+
+      // Second item will exceed 2000 bytes -> evicts b1
+      byteCache.set('b2', { content: 'y'.repeat(400), name: '2', path: '2', supported: true, size: 400 }, 1000)
+      expect(byteCache.size).toBe(1)
+      expect(byteCache.get('b1', 1000)).toBeUndefined()
+      expect(byteCache.get('b2', 1000)).toBeDefined()
+    })
+
+    it('clears all items', () => {
+      cache.set('k1', { content: '1', name: '1', path: '1', supported: true, size: 1 })
+      expect(cache.size).toBe(1)
+      cache.clear()
+      expect(cache.size).toBe(0)
+      expect(cache.totalEstimatedBytes).toBe(0)
+    })
+  })
+})
