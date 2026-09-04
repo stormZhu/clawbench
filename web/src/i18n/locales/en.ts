@@ -870,6 +870,8 @@ export default {
       close: 'Close preview',
       expand: 'Expand context (+5)',
       shrink: 'Shrink context (-5)',
+      wrap: 'Wrap lines',
+      unwrap: 'Unwrap lines',
       loading: 'Loading code...',
       retry: 'Retry',
       largeFileNotice: 'Large file: preview shows partial content and may load slower',

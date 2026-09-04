@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { ref, reactive } from 'vue'
+import { ref, reactive, nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import CodeLinkPreview from '@/components/file/CodeLinkPreview.vue'
 import type { useCodeLinkPreview } from '@/composables/useCodeLinkPreview'
@@ -46,6 +46,8 @@ const i18n = createI18n({
           close: 'Close preview',
           expand: 'Expand context (+5)',
           shrink: 'Shrink context (-5)',
+          wrap: 'Wrap lines',
+          unwrap: 'Unwrap lines',
           loading: 'Loading code...',
           retry: 'Retry',
           largeFileNotice: 'Large file: preview shows partial content and may load slower',
@@ -161,6 +163,7 @@ function createMockPreviewController(overrides: Partial<ReturnType<typeof useCod
 describe('CodeLinkPreview.vue', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
+    localStorage.clear()
   })
 
   it('renders loading status with aria-live="polite"', () => {
@@ -395,5 +398,99 @@ describe('CodeLinkPreview.vue', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2' }))
 
     expect(copyBtn.focus).toHaveBeenCalled()
+  })
+
+  it('toggles word-wrap and updates class and aria-pressed', async () => {
+    const preview = createMockPreviewController()
+
+    mount(CodeLinkPreview, {
+      props: { preview },
+      global: { plugins: [i18n] },
+    })
+
+    const wrapBtn = document.querySelector('button[title="Wrap lines"]') as HTMLButtonElement
+    expect(wrapBtn).not.toBeNull()
+    expect(wrapBtn.getAttribute('aria-pressed')).toBe('false')
+
+    const scrollPane = document.querySelector('.code-preview-scroll') as HTMLElement
+    expect(scrollPane.classList.contains('is-word-wrap')).toBe(false)
+
+    // Click toggle
+    wrapBtn.click()
+    await nextTick()
+
+    expect(scrollPane.classList.contains('is-word-wrap')).toBe(true)
+    expect(wrapBtn.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('centers target line on scrollPane when ready', async () => {
+    const preview = createMockPreviewController({
+      status: ref('ready'),
+      slicedCode: ref({
+        code: Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n'),
+        startLine: 1,
+        endLine: 50,
+        totalLines: 100,
+        highlightStart: 25,
+        highlightEnd: 25,
+        lineOutOfRange: false,
+        renderTruncated: false,
+      }),
+    })
+
+    mount(CodeLinkPreview, {
+      props: { preview },
+      global: { plugins: [i18n] },
+    })
+
+    const scrollPane = document.querySelector('.code-preview-scroll') as HTMLElement
+    expect(scrollPane).not.toBeNull()
+
+    // Mock clientHeight and offsetTop for testing scroll calculation
+    Object.defineProperty(scrollPane, 'clientHeight', { value: 300, configurable: true })
+    let mockScrollTop = 0
+    Object.defineProperty(scrollPane, 'scrollTop', {
+      get: () => mockScrollTop,
+      set: (val: number) => {
+        mockScrollTop = val
+      },
+      configurable: true,
+    })
+
+    const targetRow = scrollPane.querySelector('.code-preview-line-row.is-target-line') as HTMLElement
+    expect(targetRow).not.toBeNull()
+    Object.defineProperty(targetRow, 'clientHeight', { value: 20, configurable: true })
+    Object.defineProperty(targetRow, 'offsetTop', { value: 480, configurable: true })
+
+    const wrapBtn = document.querySelector('button[title="Wrap lines"]') as HTMLButtonElement
+    expect(wrapBtn).not.toBeNull()
+    wrapBtn.click()
+    await nextTick()
+    await nextTick()
+
+    // Target line offsetTop=480, containerHeight=300, targetHeight=20 -> (300-20)/2 = 140 -> scrollTop = 480 - 140 = 340
+    expect(scrollPane.scrollTop).toBe(340)
+  })
+
+  it('applies dynamic maxHeight to cardStyle when placement.maxHeight is present', () => {
+    const preview = createMockPreviewController({
+      placement: ref({
+        viewportX: 100,
+        viewportY: 60,
+        cssLeft: '100px',
+        cssTop: '60px',
+        maxHeight: 320,
+        quadrant: 'clamped',
+      }),
+    })
+
+    mount(CodeLinkPreview, {
+      props: { preview },
+      global: { plugins: [i18n] },
+    })
+
+    const floating = document.querySelector('.code-link-preview-floating') as HTMLElement
+    expect(floating).not.toBeNull()
+    expect(floating.style.maxHeight).toContain('320px')
   })
 })

@@ -13,7 +13,7 @@ import { toFixedCSS, getZoomedViewport } from '@/composables/useSettingsConfig'
 
 // ── Resource limits & constants ─────────────────────────────────────────────
 
-export const DEFAULT_CONTEXT = 3
+export const DEFAULT_CONTEXT = 30
 export const DEFAULT_NO_RANGE_LINES = 30
 export const MAX_RENDER_LINES = 200
 export const MAX_RENDER_BYTES = 512 * 1024 // 512 KiB
@@ -187,18 +187,30 @@ export function sliceCodeForPreview(
       highlightEnd = Math.min(reqEnd, totalLines)
 
       const contextLines = DEFAULT_CONTEXT + expansion * 5
-      const desiredStart = Math.max(1, highlightStart - contextLines)
-      const desiredEnd = Math.min(totalLines, highlightEnd + contextLines)
+      const targetSpan = highlightEnd - highlightStart + 1
 
       // If target range itself exceeds MAX_RENDER_LINES, start at highlightStart
-      if (highlightEnd - highlightStart + 1 > MAX_RENDER_LINES) {
+      if (targetSpan > MAX_RENDER_LINES) {
         startLine = highlightStart
         endLine = Math.min(totalLines, highlightStart + MAX_RENDER_LINES - 1)
         renderTruncated = true
         truncateReason = 'lines'
       } else {
-        startLine = desiredStart
-        endLine = desiredEnd
+        const windowSize = Math.min(MAX_RENDER_LINES, targetSpan + contextLines * 2)
+        let start = Math.max(1, highlightStart - contextLines)
+        let end = Math.min(totalLines, highlightEnd + contextLines)
+
+        // If top clamped to 1, expand bottom as much as possible up to windowSize
+        if (start === 1) {
+          end = Math.min(totalLines, start + windowSize - 1)
+        }
+        // If bottom clamped to totalLines, expand top as much as possible up to windowSize
+        if (end === totalLines) {
+          start = Math.max(1, end - windowSize + 1)
+        }
+
+        startLine = start
+        endLine = end
         if (endLine - startLine + 1 > MAX_RENDER_LINES) {
           endLine = startLine + MAX_RENDER_LINES - 1
           renderTruncated = true
@@ -273,6 +285,25 @@ export function buildPreviewUrl(path: string): string {
   return `/api/file/${encodeURIComponent(cleanPath)}`
 }
 
+export const DEFAULT_SAFE_AREA_TOP = 36
+
+/**
+ * Resolve bottom pixel position of the top fixed ClawBench App Header.
+ * Prevents floating preview cards or popups from occluding or hiding under the header.
+ */
+export function getAppHeaderBottom(): number {
+  if (typeof document === 'undefined') return DEFAULT_SAFE_AREA_TOP
+  const header = document.querySelector('.header')
+  if (header) {
+    const rect = header.getBoundingClientRect()
+    if (rect.bottom > 0) return Math.round(rect.bottom)
+  }
+  const safeTop = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--header-safe-area-top')) || 0
+  const headerHeight = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--header-height')) || 36
+  const total = headerHeight + safeTop
+  return total > 0 ? total : DEFAULT_SAFE_AREA_TOP
+}
+
 // ── Positioning & Clamp ─────────────────────────────────────────────────────
 
 export interface RectLike {
@@ -298,6 +329,8 @@ export interface CardPlacementResult {
   cssLeft: string
   /** CSS top value (scaled for CSS zoom via toFixedCSS) */
   cssTop: string
+  /** Maximum allowable height in viewport pixels (optional dynamic constraint) */
+  maxHeight?: number
   /** Chosen quadrant name */
   quadrant: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'clamped'
 }
@@ -324,7 +357,10 @@ export function placeNearAnchor(
   const vp = opts.viewport ?? (typeof window !== 'undefined' ? getZoomedViewport() : { width: 1024, height: 768 })
   const edgeMargin = opts.edgeMargin ?? DEFAULT_EDGE_MARGIN
   const gap = opts.gap ?? DEFAULT_ANCHOR_GAP
-  const safeAreaTop = (opts.safeAreaTop ?? 0) + edgeMargin
+  const resolvedSafeAreaTop = opts.safeAreaTop !== undefined
+    ? opts.safeAreaTop
+    : (typeof window !== 'undefined' ? getAppHeaderBottom() : DEFAULT_SAFE_AREA_TOP)
+  const safeAreaTop = resolvedSafeAreaTop + edgeMargin
 
   const minX = edgeMargin
   const maxX = Math.max(edgeMargin, vp.width - cardWidth - edgeMargin)
@@ -335,59 +371,80 @@ export function placeNearAnchor(
   const brX = anchorRect.left
   const brY = anchorRect.bottom + gap
   if (brX >= minX && brX + cardWidth <= vp.width - edgeMargin && brY >= minY && brY + cardHeight <= vp.height - edgeMargin) {
-    return makePlacement(brX, brY, 'bottom-right')
+    const availableHeight = vp.height - edgeMargin - brY
+    return makePlacement(brX, brY, 'bottom-right', availableHeight)
   }
 
   // 2. Bottom-Left
   const blX = anchorRect.right - cardWidth
   const blY = anchorRect.bottom + gap
   if (blX >= minX && blX + cardWidth <= vp.width - edgeMargin && blY >= minY && blY + cardHeight <= vp.height - edgeMargin) {
-    return makePlacement(blX, blY, 'bottom-left')
+    const availableHeight = vp.height - edgeMargin - blY
+    return makePlacement(blX, blY, 'bottom-left', availableHeight)
   }
 
   // 3. Top-Right
   const trX = anchorRect.left
   const trY = anchorRect.top - gap - cardHeight
   if (trX >= minX && trX + cardWidth <= vp.width - edgeMargin && trY >= minY && trY + cardHeight <= vp.height - edgeMargin) {
-    return makePlacement(trX, trY, 'top-right')
+    const availableHeight = anchorRect.top - gap - minY
+    return makePlacement(trX, trY, 'top-right', availableHeight)
   }
 
   // 4. Top-Left
   const tlX = anchorRect.right - cardWidth
   const tlY = anchorRect.top - gap - cardHeight
   if (tlX >= minX && tlX + cardWidth <= vp.width - edgeMargin && tlY >= minY && tlY + cardHeight <= vp.height - edgeMargin) {
-    return makePlacement(tlX, tlY, 'top-left')
+    const availableHeight = anchorRect.top - gap - minY
+    return makePlacement(tlX, tlY, 'top-left', availableHeight)
   }
 
   // Fallback: prefer side that fits cardHeight, otherwise choose side with more space
-  const spaceBelow = vp.height - (anchorRect.bottom + gap) - edgeMargin
-  const spaceAbove = anchorRect.top - gap - safeAreaTop
+  const spaceBelow = Math.max(0, vp.height - (anchorRect.bottom + gap) - edgeMargin)
+  const spaceAbove = Math.max(0, anchorRect.top - gap - minY)
   const fitsBelow = spaceBelow >= cardHeight
   const fitsAbove = spaceAbove >= cardHeight
   const goBelow = fitsBelow || (!fitsAbove && spaceBelow >= spaceAbove)
 
-  const rawY = goBelow ? anchorRect.bottom + gap : anchorRect.top - gap - cardHeight
+  let rawY: number
+  let availableHeight: number
+  if (goBelow) {
+    rawY = anchorRect.bottom + gap
+    availableHeight = spaceBelow
+  } else {
+    // Going above: limit height to spaceAbove so top does not hide behind header,
+    // and bottom stays above anchorRect.top - gap
+    availableHeight = spaceAbove
+    const actualHeight = Math.min(cardHeight, spaceAbove)
+    rawY = anchorRect.top - gap - actualHeight
+  }
   const rawX = anchorRect.left
 
   const clampedX = Math.min(Math.max(rawX, minX), maxX)
   const clampedY = Math.min(Math.max(rawY, minY), maxY)
 
-  return makePlacement(clampedX, clampedY, 'clamped')
+  return makePlacement(clampedX, clampedY, 'clamped', availableHeight)
 }
 
-function makePlacement(x: number, y: number, quadrant: CardPlacementResult['quadrant']): CardPlacementResult {
+function makePlacement(
+  x: number,
+  y: number,
+  quadrant: CardPlacementResult['quadrant'],
+  maxHeight?: number
+): CardPlacementResult {
   return {
     viewportX: x,
     viewportY: y,
     cssLeft: `${toFixedCSS(x)}px`,
     cssTop: `${toFixedCSS(y)}px`,
+    maxHeight: maxHeight !== undefined ? Math.round(maxHeight) : undefined,
     quadrant,
   }
 }
 
 /**
  * Clamp card position within viewport bounds during drag or resize.
- * Ensures the titlebar (at top of card) always stays visible.
+ * Ensures the titlebar (at top of card) always stays visible and below the app header.
  */
 export function clampCardPosition(
   x: number,
@@ -395,11 +452,14 @@ export function clampCardPosition(
   cardWidth: number,
   cardHeight: number,
   viewport?: ViewportSize,
-  safeAreaTop = 0,
+  safeAreaTop?: number,
   edgeMargin = DEFAULT_EDGE_MARGIN
 ): { viewportX: number; viewportY: number; cssLeft: string; cssTop: string } {
   const vp = viewport ?? (typeof window !== 'undefined' ? getZoomedViewport() : { width: 1024, height: 768 })
-  const topSafe = safeAreaTop + edgeMargin
+  const resolvedSafeAreaTop = safeAreaTop !== undefined
+    ? safeAreaTop
+    : (typeof window !== 'undefined' ? getAppHeaderBottom() : DEFAULT_SAFE_AREA_TOP)
+  const topSafe = resolvedSafeAreaTop + edgeMargin
 
   const minX = edgeMargin
   const maxX = Math.max(edgeMargin, vp.width - cardWidth - edgeMargin)
@@ -532,3 +592,52 @@ export class CodeLinkPreviewCache {
 
 /** Global shared LRU cache instance for code link previews */
 export const previewCache = new CodeLinkPreviewCache()
+
+// ── Syntax Highlight Line Splitter ──────────────────────────────────────────
+
+/**
+ * Splits syntax-highlighted HTML string into per-line HTML strings,
+ * properly balancing and restoring any opened <span> tags across line breaks.
+ */
+export function splitHighlightedHtml(html: string): string[] {
+  if (!html) return []
+  const lines: string[] = []
+  const openTags: string[] = []
+  let currentLine = ''
+
+  // Matches open span, close span, newline, or chunk of text / other tag
+  const tokenRegex = /(<span\b[^>]*>)|(<\/span>)|(\r\n|\n|\r)|([^<\r\n]+)|(<[^>]+>)/g
+  let match: RegExpExecArray | null
+
+  while ((match = tokenRegex.exec(html)) !== null) {
+    const [, openSpan, closeSpan, newline, text, otherTag] = match
+
+    if (newline) {
+      let lineWithClosed = currentLine
+      for (let i = openTags.length - 1; i >= 0; i--) {
+        lineWithClosed += '</span>'
+      }
+      lines.push(lineWithClosed)
+      currentLine = openTags.join('')
+    } else if (openSpan) {
+      openTags.push(openSpan)
+      currentLine += openSpan
+    } else if (closeSpan) {
+      openTags.pop()
+      currentLine += closeSpan
+    } else if (text) {
+      currentLine += text
+    } else if (otherTag) {
+      currentLine += otherTag
+    }
+  }
+
+  let lineWithClosed = currentLine
+  for (let i = openTags.length - 1; i >= 0; i--) {
+    lineWithClosed += '</span>'
+  }
+  lines.push(lineWithClosed)
+
+  return lines
+}
+

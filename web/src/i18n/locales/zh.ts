@@ -870,6 +870,8 @@ export default {
       close: '关闭预览',
       expand: '展开上下文 (+5)',
       shrink: '收缩上下文 (-5)',
+      wrap: '代码换行',
+      unwrap: '取消换行',
       loading: '正在加载代码...',
       retry: '重试',
       largeFileNotice: '文件较大，预览仅显示局部内容，加载可能较慢',

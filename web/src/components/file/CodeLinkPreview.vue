@@ -24,6 +24,13 @@
         <button class="code-preview-btn" @click="handleCopy">
           {{ copied ? t('file.codePreview.copied') : t('file.codePreview.copy') }}
         </button>
+        <button
+          class="code-preview-btn"
+          :class="{ 'is-active': isWordWrap }"
+          @click="toggleWordWrap"
+        >
+          {{ isWordWrap ? t('file.codePreview.unwrap') : t('file.codePreview.wrap') }}
+        </button>
         <button class="code-preview-btn" @click="preview.expandContext()">
           {{ t('file.codePreview.expand') }}
         </button>
@@ -63,27 +70,30 @@
         </div>
 
         <!-- Code viewer -->
-        <div v-else-if="preview.status.value === 'ready'" class="code-preview-scroll">
-          <div class="code-preview-gutter" aria-hidden="true">
+        <div
+          v-else-if="preview.status.value === 'ready'"
+          ref="sheetScrollRef"
+          class="code-preview-scroll"
+          :class="{ 'is-word-wrap': isWordWrap }"
+        >
+          <div class="code-preview-lines">
             <div
-              v-for="lineNum in lineNumbersList"
-              :key="lineNum"
-              class="code-preview-line-number"
-              :class="{ 'is-target-line': isTargetLine(lineNum) }"
+              v-for="line in codeLines"
+              :key="line.lineNum"
+              class="code-preview-line-row"
+              :class="{ 'is-target-line': line.isTarget }"
             >
-              {{ lineNum }}
-            </div>
-          </div>
-          <div class="code-preview-code-pane">
-            <div class="code-preview-line-backgrounds" aria-hidden="true">
               <div
-                v-for="lineNum in lineNumbersList"
-                :key="'bg-' + lineNum"
-                class="code-preview-line-bg"
-                :class="{ 'is-target-line': isTargetLine(lineNum) }"
-              />
+                class="code-preview-line-number"
+                :class="{ 'is-target-line': line.isTarget }"
+                aria-hidden="true"
+              >
+                {{ line.lineNum }}
+              </div>
+              <div class="code-preview-line-code">
+                <code class="hljs" v-html="line.html || '&nbsp;'" />
+              </div>
             </div>
-            <pre><code class="hljs" v-html="highlightedHtml" /></pre>
           </div>
         </div>
       </div>
@@ -143,6 +153,18 @@
           </button>
           <button
             class="code-preview-btn"
+            :class="{ 'is-active': isWordWrap }"
+            :title="isWordWrap ? t('file.codePreview.unwrap') : t('file.codePreview.wrap')"
+            :aria-label="isWordWrap ? t('file.codePreview.unwrap') : t('file.codePreview.wrap')"
+            :aria-pressed="isWordWrap"
+            @click="toggleWordWrap"
+          >
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 6h16M4 12h10a3 3 0 0 1 3 3v0a3 3 0 0 1-3 3H11m0 0l3-3m-3 3l3 3M4 18h4" />
+            </svg>
+          </button>
+          <button
+            class="code-preview-btn"
             :title="t('file.codePreview.refresh')"
             :aria-label="t('file.codePreview.refresh')"
             @click="preview.refresh()"
@@ -159,8 +181,18 @@
             :aria-label="preview.isPinned.value ? t('file.codePreview.unpin') : t('file.codePreview.pin')"
             @click="preview.togglePin()"
           >
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2v8m-7 4h14l-2 6H7l-2-6zm7 6v4" />
+            <svg
+              viewBox="0 0 24 24"
+              width="12"
+              height="12"
+              :fill="preview.isPinned.value ? 'currentColor' : 'none'"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 17v5" />
+              <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
             </svg>
           </button>
           <button
@@ -224,27 +256,30 @@
         </div>
 
         <!-- Code Content -->
-        <div v-else-if="preview.status.value === 'ready'" ref="scrollPaneRef" class="code-preview-scroll">
-          <div class="code-preview-gutter" aria-hidden="true">
+        <div
+          v-else-if="preview.status.value === 'ready'"
+          ref="scrollPaneRef"
+          class="code-preview-scroll"
+          :class="{ 'is-word-wrap': isWordWrap }"
+        >
+          <div class="code-preview-lines">
             <div
-              v-for="lineNum in lineNumbersList"
-              :key="lineNum"
-              class="code-preview-line-number"
-              :class="{ 'is-target-line': isTargetLine(lineNum) }"
+              v-for="line in codeLines"
+              :key="line.lineNum"
+              class="code-preview-line-row"
+              :class="{ 'is-target-line': line.isTarget }"
             >
-              {{ lineNum }}
-            </div>
-          </div>
-          <div class="code-preview-code-pane">
-            <div class="code-preview-line-backgrounds" aria-hidden="true">
               <div
-                v-for="lineNum in lineNumbersList"
-                :key="'bg-' + lineNum"
-                class="code-preview-line-bg"
-                :class="{ 'is-target-line': isTargetLine(lineNum) }"
-              />
+                class="code-preview-line-number"
+                :class="{ 'is-target-line': line.isTarget }"
+                aria-hidden="true"
+              >
+                {{ line.lineNum }}
+              </div>
+              <div class="code-preview-line-code">
+                <code class="hljs" v-html="line.html || '&nbsp;'" />
+              </div>
             </div>
-            <pre><code class="hljs" v-html="highlightedHtml" /></pre>
           </div>
         </div>
       </div>
@@ -258,7 +293,7 @@ import { useI18n } from 'vue-i18n'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import { highlightCode } from '@/utils/globals'
 import { getFileType } from '@/utils/fileType'
-import { clampCardPosition } from '@/utils/codeLinkPreview'
+import { clampCardPosition, splitHighlightedHtml } from '@/utils/codeLinkPreview'
 import { toFixedCSS, useSettingsConfig } from '@/composables/useSettingsConfig'
 import type { useCodeLinkPreview } from '@/composables/useCodeLinkPreview'
 import '@/assets/code-link-preview.css'
@@ -270,10 +305,33 @@ const props = defineProps<{
 const { t } = useI18n()
 const { localConfig } = useSettingsConfig()
 
+const STORAGE_KEY_WRAP = 'clawbench:code-preview-word-wrap'
+
 const cardRef = ref<HTMLElement | null>(null)
 const scrollPaneRef = ref<HTMLElement | null>(null)
+const sheetScrollRef = ref<HTMLElement | null>(null)
 const firstActionBtnRef = ref<HTMLButtonElement | null>(null)
 const copied = ref(false)
+const isWordWrap = ref<boolean>(false)
+
+try {
+  const saved = localStorage.getItem(STORAGE_KEY_WRAP)
+  if (saved !== null) {
+    isWordWrap.value = saved === 'true'
+  }
+} catch {
+  // ignore
+}
+
+const toggleWordWrap = () => {
+  isWordWrap.value = !isWordWrap.value
+  try {
+    localStorage.setItem(STORAGE_KEY_WRAP, String(isWordWrap.value))
+  } catch {
+    // ignore
+  }
+  scrollToTargetLine()
+}
 
 // Dragging coordinates in viewport pixels
 const dragX = ref<number | null>(null)
@@ -306,16 +364,6 @@ const errorMessageText = computed(() => {
   return props.preview.errorMessage.value || t('file.codePreview.loadError')
 })
 
-const lineNumbersList = computed(() => {
-  const sliced = props.preview.slicedCode.value
-  if (!sliced) return []
-  const list: number[] = []
-  for (let i = sliced.startLine; i <= sliced.endLine; i++) {
-    list.push(i)
-  }
-  return list
-})
-
 const isTargetLine = (lineNum: number): boolean => {
   const sliced = props.preview.slicedCode.value
   if (!sliced?.highlightStart) return false
@@ -324,13 +372,62 @@ const isTargetLine = (lineNum: number): boolean => {
   return lineNum >= start && lineNum <= end
 }
 
-const highlightedHtml = computed(() => {
+export interface FormattedCodeLine {
+  lineNum: number
+  html: string
+  isTarget: boolean
+}
+
+const codeLines = computed<FormattedCodeLine[]>(() => {
   const sliced = props.preview.slicedCode.value
-  if (!sliced?.code) return ''
+  if (!sliced?.code) return []
   const filePath = props.preview.target.value?.filePath || ''
   const lang = getFileType(filePath).lang || 'plaintext'
-  return highlightCode(sliced.code, lang)
+  const fullHtml = highlightCode(sliced.code, lang)
+  const lineHtmls = splitHighlightedHtml(fullHtml)
+
+  const result: FormattedCodeLine[] = []
+  const start = sliced.startLine
+  for (let i = 0; i < lineHtmls.length; i++) {
+    const lineNum = start + i
+    result.push({
+      lineNum,
+      html: lineHtmls[i],
+      isTarget: isTargetLine(lineNum),
+    })
+  }
+  return result
 })
+
+const getRelativeOffsetTop = (child: HTMLElement, parent: HTMLElement): number => {
+  let top = 0
+  let el: HTMLElement | null = child
+  while (el && el !== parent) {
+    top += el.offsetTop
+    el = el.offsetParent as HTMLElement | null
+  }
+  return top
+}
+
+const scrollToTargetLine = () => {
+  nextTick(() => {
+    const scrollEl = scrollPaneRef.value || sheetScrollRef.value
+    if (!scrollEl) return
+    const targetEls = scrollEl.querySelectorAll('.code-preview-line-row.is-target-line')
+    if (targetEls.length > 0) {
+      const firstEl = targetEls[0] as HTMLElement
+      const lastEl = targetEls[targetEls.length - 1] as HTMLElement
+      const rangeTop = getRelativeOffsetTop(firstEl, scrollEl)
+      const rangeBottom = getRelativeOffsetTop(lastEl, scrollEl) + lastEl.clientHeight
+      const rangeHeight = rangeBottom - rangeTop
+      const containerHeight = scrollEl.clientHeight
+      const idealScrollTop = rangeHeight >= containerHeight
+        ? rangeTop
+        : rangeTop - Math.floor((containerHeight - rangeHeight) / 2)
+      scrollEl.scrollTop = Math.max(0, idealScrollTop)
+    }
+  })
+}
 
 const cardStyle = computed(() => {
   if (dragX.value !== null && dragY.value !== null) {
@@ -341,10 +438,14 @@ const cardStyle = computed(() => {
   }
   const plc = props.preview.placement.value
   if (plc) {
-    return {
+    const style: Record<string, string> = {
       left: plc.cssLeft,
       top: plc.cssTop,
     }
+    if (plc.maxHeight && plc.maxHeight > 0) {
+      style.maxHeight = `min(65vh, 480px, ${toFixedCSS(plc.maxHeight)}px)`
+    }
+    return style
   }
   const anchor = props.preview.target.value?.anchorEl
   if (anchor && typeof anchor.getBoundingClientRect === 'function') {
@@ -498,6 +599,9 @@ watch(
       dragY.value = null
       stopDragging()
     } else {
+      if (props.preview.status.value === 'ready') {
+        scrollToTargetLine()
+      }
       nextTick(() => {
         syncPlacementWithCard()
       })
@@ -522,10 +626,22 @@ watch(
 // Re-sync placement when code loads or context changes (card height changes)
 watch(
   () => props.preview.status.value,
-  () => {
+  (st) => {
+    if (st === 'ready') {
+      scrollToTargetLine()
+    }
     nextTick(() => {
       syncPlacementWithCard()
     })
+  }
+)
+
+watch(
+  codeLines,
+  () => {
+    if (props.preview.visible.value && props.preview.status.value === 'ready') {
+      scrollToTargetLine()
+    }
   }
 )
 

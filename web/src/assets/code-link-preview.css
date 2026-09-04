@@ -4,11 +4,12 @@
 
 .code-link-preview-floating {
   position: fixed;
-  z-index: 850;
+  z-index: 1200;
   display: flex;
   flex-direction: column;
   width: min(640px, calc(100vw - 24px));
   max-height: min(65vh, 480px);
+  min-height: 0;
   background: var(--bg-primary, #ffffff);
   border: 1px solid var(--border-color, #e0e0e0);
   border-radius: 8px;
@@ -94,9 +95,15 @@ body.code-preview-dragging * {
   outline-offset: -1px;
 }
 
-.code-preview-btn.is-pinned {
+.code-preview-btn.is-pinned,
+.code-preview-btn.is-active {
   color: var(--primary-color, #1a73e8);
   background: rgba(26, 115, 232, 0.1);
+}
+
+.code-preview-btn.is-pinned svg {
+  transform: rotate(-30deg);
+  transition: transform 0.15s ease;
 }
 
 .code-preview-notices {
@@ -122,6 +129,7 @@ body.code-preview-dragging * {
 
 .code-preview-content {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -144,8 +152,10 @@ body.code-preview-dragging * {
 
 .code-preview-scroll {
   display: flex;
+  flex-direction: column;
   overflow: auto;
   flex: 1;
+  min-height: 0;
   position: relative;
   line-height: 20px;
   font-family: var(--font-mono, 'SF Mono', Menlo, Monaco, Consolas, monospace);
@@ -153,72 +163,78 @@ body.code-preview-dragging * {
   background: var(--code-bg, #1e1e1e);
 }
 
-.code-preview-gutter {
-  position: sticky;
-  left: 0;
-  z-index: 3;
+.code-preview-lines {
   display: flex;
   flex-direction: column;
-  padding: 8px 8px 8px 6px;
-  text-align: right;
-  user-select: none;
-  background: var(--code-bg, #1e1e1e);
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.35);
+  min-width: max-content;
+  width: 100%;
+  padding: 8px 0;
+}
+
+.code-preview-scroll.is-word-wrap .code-preview-lines {
+  min-width: 100%;
+  width: 100%;
+}
+
+.code-preview-line-row {
+  display: flex;
+  align-items: stretch;
+  min-height: 20px;
+  line-height: 20px;
+  width: 100%;
+}
+
+.code-preview-line-row.is-target-line {
+  background: rgba(59, 130, 246, 0.12);
+  background: color-mix(in srgb, var(--primary-color, #3b82f6) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--primary-color, #3b82f6);
 }
 
 .code-preview-line-number {
-  height: 20px;
-  line-height: 20px;
-  font-size: 11px;
-}
-
-.code-preview-line-number.is-target-line {
-  color: var(--primary-color, #60a5fa);
-  font-weight: 600;
-}
-
-.code-preview-code-pane {
-  position: relative;
-  flex: 1;
-  min-width: max-content;
-  padding: 8px 12px;
-}
-
-.code-preview-line-backgrounds {
-  position: absolute;
-  top: 8px;
+  position: sticky;
   left: 0;
-  right: 0;
-  bottom: 8px;
-  pointer-events: none;
+  z-index: 2;
+  flex-shrink: 0;
+  min-width: 44px;
+  padding: 0 8px 0 6px;
+  text-align: right;
+  user-select: none;
+  background: var(--code-bg, var(--bg-primary, #ffffff));
+  border-right: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+  color: var(--text-muted, #8c8c8c);
+  font-size: 11px;
+  line-height: 20px;
+  align-self: stretch;
 }
 
-.code-preview-line-bg {
-  height: 20px;
+.code-preview-line-row.is-target-line .code-preview-line-number,
+.code-preview-line-number.is-target-line {
+  color: var(--primary-color, #1a73e8);
+  font-weight: 600;
+  background: rgba(59, 130, 246, 0.12);
+  background: color-mix(in srgb, var(--primary-color, #3b82f6) 12%, var(--code-bg, var(--bg-primary, #ffffff)));
+}
+
+.code-preview-line-code {
+  flex: 1;
+  min-width: 0;
+  padding: 0 12px;
   line-height: 20px;
 }
 
-.code-preview-line-bg.is-target-line {
-  background: rgba(59, 130, 246, 0.18);
-  box-shadow: inset 2px 0 0 var(--primary-color, #3b82f6);
-}
-
-.code-preview-code-pane pre {
-  margin: 0;
-  padding: 0;
-  background: transparent !important;
-  line-height: 20px;
-  overflow: visible;
-}
-
-.code-preview-code-pane code.hljs {
+.code-preview-line-code code.hljs {
+  display: block;
   padding: 0;
   background: transparent !important;
   line-height: 20px;
   font-family: inherit;
   font-size: inherit;
   white-space: pre;
+}
+
+.code-preview-scroll.is-word-wrap .code-preview-line-code code.hljs {
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* Reduced motion preference */

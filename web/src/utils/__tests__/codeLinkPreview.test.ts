@@ -3,6 +3,7 @@ import {
   normalizePreviewRange,
   sliceCodeForPreview,
   buildPreviewUrl,
+  getAppHeaderBottom,
   placeNearAnchor,
   clampCardPosition,
   CodeLinkPreviewCache,
@@ -10,6 +11,7 @@ import {
   MAX_RENDER_LINES,
   MAX_RENDER_BYTES,
   MAX_LINE_BYTES,
+  splitHighlightedHtml,
 } from '@/utils/codeLinkPreview'
 
 // Mock zoom helpers
@@ -68,24 +70,33 @@ describe('codeLinkPreview utils', () => {
       expect(res.renderTruncated).toBe(false)
     })
 
-    it('slices target line with default 3 context lines', () => {
-      // target line 5 -> [5-3, 5+3] = [2, 8]
-      const res = sliceCodeForPreview(sampleCode, 5)
-      expect(res.startLine).toBe(2)
-      expect(res.endLine).toBe(8)
-      expect(res.highlightStart).toBe(5)
-      expect(res.highlightEnd).toBe(5)
+    it('slices target line with generous default 30 context lines', () => {
+      // 200 lines sample: target line 100 -> [100-30, 100+30] = [70, 130]
+      const twoHundredLines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n')
+      const res = sliceCodeForPreview(twoHundredLines, 100)
+      expect(res.startLine).toBe(70)
+      expect(res.endLine).toBe(130)
+      expect(res.highlightStart).toBe(100)
+      expect(res.highlightEnd).toBe(100)
       expect(res.renderTruncated).toBe(false)
     })
 
-    it('clamps context lines at file beginning and end', () => {
-      const topRes = sliceCodeForPreview(sampleCode, 2)
+    it('clamps context lines at file beginning and end and redistributes context budget', () => {
+      const twoHundredLines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n')
+      // target line 5 -> windowSize = 61 -> [1, 61]
+      const topRes = sliceCodeForPreview(twoHundredLines, 5)
       expect(topRes.startLine).toBe(1)
-      expect(topRes.endLine).toBe(5)
+      expect(topRes.endLine).toBe(61)
 
-      const bottomRes = sliceCodeForPreview(sampleCode, 9)
-      expect(bottomRes.startLine).toBe(6)
-      expect(bottomRes.endLine).toBe(10)
+      // target line 195 -> windowSize = 61 -> [140, 200]
+      const bottomRes = sliceCodeForPreview(twoHundredLines, 195)
+      expect(bottomRes.startLine).toBe(140)
+      expect(bottomRes.endLine).toBe(200)
+
+      // Small 10 lines file -> includes all 10 lines
+      const smallRes = sliceCodeForPreview(sampleCode, 5)
+      expect(smallRes.startLine).toBe(1)
+      expect(smallRes.endLine).toBe(10)
     })
 
     it('supports CRLF and trailing empty line', () => {
@@ -130,17 +141,52 @@ describe('codeLinkPreview utils', () => {
     })
 
     it('supports contextExpansion (+5 lines for range, +10 for no range)', () => {
-      const fiftyLines = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n')
-      // Target line 20 -> context normally 3 -> [17, 23]
-      // Expansion 1 -> context 3 + 5 = 8 -> [12, 28]
-      const expRes = sliceCodeForPreview(fiftyLines, 20, 20, { contextExpansion: 1 })
-      expect(expRes.startLine).toBe(12)
-      expect(expRes.endLine).toBe(28)
+      const twoHundredLines = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n')
+      // Target line 100 -> context normally 30 -> [70, 130]
+      // Expansion 1 -> context 30 + 5 = 35 -> [65, 135]
+      const expRes = sliceCodeForPreview(twoHundredLines, 100, 100, { contextExpansion: 1 })
+      expect(expRes.startLine).toBe(65)
+      expect(expRes.endLine).toBe(135)
 
       // No range -> normally 30 -> expansion 1 -> 40 lines
-      const noRangeExp = sliceCodeForPreview(fiftyLines, undefined, undefined, { contextExpansion: 1 })
+      const noRangeExp = sliceCodeForPreview(twoHundredLines, undefined, undefined, { contextExpansion: 1 })
       expect(noRangeExp.startLine).toBe(1)
       expect(noRangeExp.endLine).toBe(40)
+    })
+  })
+
+  describe('splitHighlightedHtml', () => {
+    it('returns empty array for empty input', () => {
+      expect(splitHighlightedHtml('')).toEqual([])
+    })
+
+    it('splits plain text into lines', () => {
+      expect(splitHighlightedHtml('line 1\nline 2\nline 3')).toEqual(['line 1', 'line 2', 'line 3'])
+    })
+
+    it('balances multi-line span tokens across lines', () => {
+      const html = '<span class="hljs-comment">/* line 1\n * line 2\n */</span>'
+      const lines = splitHighlightedHtml(html)
+      expect(lines).toEqual([
+        '<span class="hljs-comment">/* line 1</span>',
+        '<span class="hljs-comment"> * line 2</span>',
+        '<span class="hljs-comment"> */</span>',
+      ])
+    })
+
+    it('handles nested spans spanning across newlines', () => {
+      const html = '<span class="outer"><span class="inner">a\nb</span></span>'
+      const lines = splitHighlightedHtml(html)
+      expect(lines).toEqual([
+        '<span class="outer"><span class="inner">a</span></span>',
+        '<span class="outer"><span class="inner">b</span></span>',
+      ])
+    })
+
+    it('handles CRLF line endings', () => {
+      const html = '<span class="str">foo\r\nbar</span>'
+      const lines = splitHighlightedHtml(html)
+      expect(lines).toEqual(['<span class="str">foo</span>', '<span class="str">bar</span>'])
     })
   })
 
@@ -198,6 +244,44 @@ describe('codeLinkPreview utils', () => {
 
       const resTop = clampCardPosition(100, -20, cardWidth, cardHeight, viewport, 20)
       expect(resTop.viewportY).toBe(28)
+
+      // Clamps to safe area top when not passed
+      const resDefaultTop = clampCardPosition(100, -20, cardWidth, cardHeight, viewport)
+      expect(resDefaultTop.viewportY).toBe(getAppHeaderBottom() + 8)
+    })
+
+    it('clamps card above bottom anchor and constrains maxHeight without occluding header', () => {
+      // Anchor near the bottom of viewport
+      const anchorRect = { left: 100, top: 720, right: 200, bottom: 740 }
+      const largeCardHeight = 450
+      const res = placeNearAnchor(anchorRect, cardWidth, largeCardHeight, {
+        viewport,
+        edgeMargin: 8,
+        gap: 8,
+        safeAreaTop: 44,
+      })
+
+      // Top margin should never be less than safeAreaTop + edgeMargin
+      expect(res.viewportY).toBeGreaterThanOrEqual(44 + 8)
+      // Bottom of card must not overlap anchorRect.top
+      const actualHeight = res.maxHeight ? Math.min(largeCardHeight, res.maxHeight) : largeCardHeight
+      expect(res.viewportY + actualHeight).toBeLessThanOrEqual(anchorRect.top)
+      expect(res.maxHeight).toBeDefined()
+    })
+
+    it('measures getAppHeaderBottom from DOM element when present', () => {
+      expect(getAppHeaderBottom()).toBe(36)
+
+      const headerEl = document.createElement('div')
+      headerEl.className = 'header'
+      Object.defineProperty(headerEl, 'getBoundingClientRect', {
+        value: () => ({ bottom: 37, top: 0, left: 0, right: 1000, height: 37, width: 1000 }),
+      })
+      document.body.appendChild(headerEl)
+
+      expect(getAppHeaderBottom()).toBe(37)
+
+      headerEl.remove()
     })
   })
 

@@ -354,7 +354,7 @@ describe('useCodeLinkPreview', () => {
 
   it('supports context expansion and shrinking', async () => {
     mockApiGet.mockResolvedValueOnce({
-      content: Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n'),
+      content: Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n'),
       name: 'code.ts',
       path: 'code.ts',
       supported: true,
@@ -362,21 +362,21 @@ describe('useCodeLinkPreview', () => {
     })
 
     const preview = useCodeLinkPreview()
-    preview.showPreview({ filePath: 'code.ts', lineStart: 25, lineEnd: 25 })
+    preview.showPreview({ filePath: 'code.ts', lineStart: 100, lineEnd: 100 })
     await vi.runAllTicks()
     await Promise.resolve()
 
-    expect(preview.slicedCode.value?.startLine).toBe(22)
-    expect(preview.slicedCode.value?.endLine).toBe(28)
+    expect(preview.slicedCode.value?.startLine).toBe(70)
+    expect(preview.slicedCode.value?.endLine).toBe(130)
 
     preview.expandContext()
     expect(preview.contextExpansion.value).toBe(1)
-    expect(preview.slicedCode.value?.startLine).toBe(17)
-    expect(preview.slicedCode.value?.endLine).toBe(33)
+    expect(preview.slicedCode.value?.startLine).toBe(65)
+    expect(preview.slicedCode.value?.endLine).toBe(135)
 
     preview.shrinkContext()
     expect(preview.contextExpansion.value).toBe(0)
-    expect(preview.slicedCode.value?.startLine).toBe(22)
+    expect(preview.slicedCode.value?.startLine).toBe(70)
 
     // Shrinking past 0 does nothing
     preview.shrinkContext()
