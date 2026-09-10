@@ -98,6 +98,24 @@ type Config struct {
 	Feishu      FeishuConfig      `yaml:"feishu"`       // Feishu (飞书) enterprise bot push notifications
 	PushMode    string            `yaml:"push_mode"`    // Push notification mode: "native" (default), "dingtalk", "feishu", "disabled"
 	FileSearch  FileSearchConfig  `yaml:"file_search"`  // File search configuration
+	Tailcat     TailcatConfig     `yaml:"tailcat"`      // Tailcat encrypted transport
+}
+
+// TailcatConfig controls the optional Tailcat transport exposed by the server.
+// The Tailcat address is a transport credential; it is never persisted here.
+//
+// The transport authenticates nobody by itself — the address is a bearer
+// credential and allow_clients is empty by default — so the channel always
+// requires the ClawBench session cookie. Requests arriving over Tailcat are
+// deliberately not treated as localhost.
+type TailcatConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	DERPMapURL   string   `yaml:"derp_map_url"`
+	AllowClients []string `yaml:"allow_clients"`
+	FullAddress  bool     `yaml:"full_address"`
+	// RequirePassword must remain true. Setting it to false is refused at
+	// startup rather than silently serving an unauthenticated channel.
+	RequirePassword bool `yaml:"require_password"`
 }
 
 // STTConfig holds configuration for speech-to-text (voice input).

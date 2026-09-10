@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParsePresenceMap(t *testing.T) {
@@ -175,6 +177,19 @@ func TestApplyDefaultsEmptyConfig(t *testing.T) {
 	if cfg.Appearance.WallpaperFile != "" {
 		t.Errorf("Appearance.WallpaperFile = %q, want empty (no wallpaper set)", cfg.Appearance.WallpaperFile)
 	}
+}
+
+func TestApplyDefaults_TailcatRequiresPasswordByDefault(t *testing.T) {
+	cfg := Config{Password: "configured"}
+	ApplyDefaults(&cfg, nil)
+	assert.False(t, cfg.Tailcat.Enabled)
+	assert.True(t, cfg.Tailcat.RequirePassword)
+}
+
+func TestApplyDefaults_TailcatExplicitRequirePasswordFalse(t *testing.T) {
+	cfg := Config{Password: "configured"}
+	ApplyDefaults(&cfg, map[string]bool{"tailcat.require_password": true})
+	assert.False(t, cfg.Tailcat.RequirePassword)
 }
 
 func TestApplyDefaultsPartialConfig(t *testing.T) {

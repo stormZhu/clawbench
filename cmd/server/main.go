@@ -52,6 +52,7 @@ import (
 	"clawbench/internal/startup"
 	"clawbench/internal/stt"
 	"clawbench/internal/summarize"
+	transport "clawbench/internal/tailcat"
 	"clawbench/internal/terminal"
 	"clawbench/internal/version"
 	"clawbench/internal/ws"
@@ -1075,6 +1076,18 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	// broadcast so offline clients can recover them after reconnect.
 	ws.GetManager().StreamHub().SetEventStoreFunc(service.StoreNotifiableEvent)
 
+	tailcatManager := transport.New(transport.Config{
+		Enabled:         cfg.Tailcat.Enabled,
+		DERPMapURL:      cfg.Tailcat.DERPMapURL,
+		FullAddress:     cfg.Tailcat.FullAddress,
+		AllowClients:    cfg.Tailcat.AllowClients,
+		RequirePassword: cfg.Tailcat.RequirePassword,
+		// The transport adds no authentication of its own, so it only runs
+		// while ClawBench password auth is active.
+		AuthEnabled: model.SessionToken != "",
+	})
+	handler.SetTailcatManager(tailcatManager)
+
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -1134,6 +1147,11 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	if err != nil {
 		slog.Error("failed to listen", slog.String("addr", addr), slog.String("err", err.Error()))
 		os.Exit(1)
+	}
+	if cfg.Tailcat.Enabled {
+		if err := tailcatManager.Start(context.Background(), port, mux); err != nil {
+			slog.Error("tailcat transport failed to start", slog.String("err", err.Error()))
+		}
 	}
 
 	// Start dev HTTP listener before banner (so its slog doesn't disrupt the banner)
@@ -1273,6 +1291,9 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 			if err := devSrv.Shutdown(shutdownCtx); err != nil {
 				slog.Error("dev listener shutdown error", slog.String("err", err.Error()))
 			}
+		}
+		if err := tailcatManager.Stop(context.Background()); err != nil {
+			slog.Error("tailcat shutdown error", slog.String("err", err.Error()))
 		}
 
 		// 5. Cancel any remaining in-flight prompts so their executors exit the

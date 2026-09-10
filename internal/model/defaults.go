@@ -131,6 +131,16 @@ func ApplyDefaults(cfg *Config, presence map[string]bool) string { //nolint:goco
 		cfg.LogMaxDays = 7
 	}
 
+	// --- Tailcat ---
+	// Tailcat is opt-in because its address is a bearer transport credential.
+	// Password authentication remains required unless explicitly disabled.
+	if !presence["tailcat.require_password"] {
+		cfg.Tailcat.RequirePassword = true
+	}
+	if !presence["tailcat.full_address"] {
+		cfg.Tailcat.FullAddress = true
+	}
+
 	// --- LocalhostAuthExempt ---
 	// Default: true (localhost bypasses auth). Only set to false when explicitly
 	// configured. Use presence map to detect explicit setting.

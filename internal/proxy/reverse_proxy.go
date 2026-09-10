@@ -64,38 +64,56 @@ func NewReverseProxy(listenHost string, listenPort int, targetAddr string, proto
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 
-	// Create the httputil.ReverseProxy
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	proxy.Transport = rp.transport
+	// Create the httputil.ReverseProxy.
+	//
+	// Director has been deprecated since Go 1.26, so this uses Rewrite. The
+	// callback below reproduces the exact Director behavior this proxy shipped
+	// with: SetURL does what NewSingleHostReverseProxy's director did (route to
+	// the target scheme/host and join paths), and the two remaining quirks —
+	// rewriting the Host header, and folding the client IP into X-Forwarded-For
+	// — are spelled out.
+	proxy := &httputil.ReverseProxy{
+		Transport: rp.transport,
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(targetURL)
+			// Set Host to the target address, omitting default ports per HTTP spec.
+			// e.g. "192.168.100.1:80" with scheme "http" → "192.168.100.1"
+			// but "192.168.100.1:8080" → "192.168.100.1:8080"
+			pr.Out.Host = stripDefaultPort(host, scheme)
 
-	// Customize the Director to rewrite Host header
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		// Set Host to the target address, omitting default ports per HTTP spec.
-		// e.g. "192.168.100.1:80" with scheme "http" → "192.168.100.1"
-		// but "192.168.100.1:8080" → "192.168.100.1:8080"
-		req.Host = stripDefaultPort(host, scheme)
-		// Ensure the scheme is correct
-		req.URL.Scheme = targetURL.Scheme
-		req.URL.Host = targetURL.Host
-	}
-
-	// Rewrite Location headers in 3xx responses from the target host back to
-	// the proxy's listen address. Without this, backends return
-	// "Location: http://192.168.100.1:8080/path" which clients cannot reach
-	// when accessing through the reverse proxy on localhost.
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		loc := resp.Header.Get("Location")
-		if loc == "" || resp.StatusCode < 300 || resp.StatusCode >= 400 {
+			// Rewrite, unlike Director, strips the X-Forwarded-* headers before
+			// the callback runs. Re-append the client IP to whatever the client
+			// sent, which is what ReverseProxy's Director path did. Calling
+			// SetXForwarded instead would additionally start emitting
+			// X-Forwarded-Host and X-Forwarded-Proto, which the backends behind
+			// this proxy have never received — a behavior change, not a fix.
+			if clientIP, _, splitErr := net.SplitHostPort(pr.In.RemoteAddr); splitErr == nil {
+				prior, hadPrior := pr.In.Header["X-Forwarded-For"]
+				omit := hadPrior && prior == nil // mirror "nil means don't populate"
+				if len(prior) > 0 {
+					clientIP = strings.Join(prior, ", ") + ", " + clientIP
+				}
+				if !omit {
+					pr.Out.Header.Set("X-Forwarded-For", clientIP)
+				}
+			}
+		},
+		// Rewrite Location headers in 3xx responses from the target host back to
+		// the proxy's listen address. Without this, backends return
+		// "Location: http://192.168.100.1:8080/path" which clients cannot reach
+		// when accessing through the reverse proxy on localhost.
+		ModifyResponse: func(resp *http.Response) error {
+			loc := resp.Header.Get("Location")
+			if loc == "" || resp.StatusCode < 300 || resp.StatusCode >= 400 {
+				return nil
+			}
+			rewritten := rewriteLocation(loc, targetURL, rp.listener.Addr())
+			if rewritten != loc {
+				slog.Debug("reverse proxy rewriting Location", slog.String("from", loc), slog.String("to", rewritten))
+				resp.Header.Set("Location", rewritten)
+			}
 			return nil
-		}
-		rewritten := rewriteLocation(loc, targetURL, rp.listener.Addr())
-		if rewritten != loc {
-			slog.Debug("reverse proxy rewriting Location", slog.String("from", loc), slog.String("to", rewritten))
-			resp.Header.Set("Location", rewritten)
-		}
-		return nil
+		},
 	}
 
 	rp.proxy = proxy

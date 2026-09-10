@@ -6,7 +6,8 @@ version: "2"
 run:
   timeout: 5m
   tests: true
-  go: "1.25"
+  # Must match the go directive in go.mod (tailcat/tailscale.com force 1.26.5).
+  go: "1.26"
 
 linters:
   default: none

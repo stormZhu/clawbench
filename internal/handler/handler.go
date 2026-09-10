@@ -17,9 +17,15 @@ import (
 	"clawbench/internal/model"
 	"clawbench/internal/platform"
 	"clawbench/internal/proxy"
+	transport "clawbench/internal/tailcat"
 	"clawbench/internal/ws"
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 )
+
+var tailcatManager *transport.Manager
+
+// SetTailcatManager injects the process-wide Tailcat transport manager.
+func SetTailcatManager(m *transport.Manager) { tailcatManager = m }
 
 // jsonKeyStatus is the JSON key "status" used across handler responses (goconst).
 const jsonKeyStatus = "status"
@@ -232,6 +238,9 @@ func RegisterRoutes(mux *http.ServeMux) {
 	register("/api/config/test", middleware.Auth(ServeConfigTest))
 	register("/api/config/restart", middleware.Auth(ServeConfigRestart))
 	register("/api/config/password", middleware.Auth(ServeConfigPassword))
+	register("/api/tailcat/status", middleware.Auth(ServeTailcatStatus))
+	register("/api/tailcat/start", middleware.Auth(ServeTailcatStart))
+	register("/api/tailcat/stop", middleware.Auth(ServeTailcatStop))
 	register("/api/fonts/list", middleware.Auth(ServeFontsList))
 	register("/api/fonts/file", middleware.Auth(ServeFontFile))
 	register("/api/theme-background", middleware.Auth(ServeThemeBackground))
