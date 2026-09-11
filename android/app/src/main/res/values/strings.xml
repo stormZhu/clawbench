@@ -101,6 +101,20 @@
     <string name="notif_status_separator">, </string>
     <string name="notif_listening">Listening for messages</string>
     <string name="notif_service_stopping">Background service stopping</string>
+    <!-- Tailcat transport -->
+    <string name="notif_channel_tailcat">Tailcat connection service</string>
+    <string name="notif_channel_tailcat_desc">Keeps the Tailcat encrypted transport connected</string>
+    <string name="notif_tailcat_connecting">Connecting through Tailcat…</string>
+    <string name="notif_tailcat_connected">Connected through Tailcat</string>
+    <string name="notif_tailcat_error">Tailcat connection failed</string>
+    <string name="notif_tailcat_stopped">Tailcat transport stopped</string>
+
+    <string name="tailcat_err_empty_address">Please enter a Tailcat address</string>
+    <string name="tailcat_err_bad_address">Not a valid Tailcat address</string>
+    <string name="tailcat_err_bad_port">Please enter a valid server port (1-65535)</string>
+    <string name="tailcat_err_not_running">No Tailcat address saved yet</string>
+    <string name="tailcat_err_start_failed">Unable to connect through Tailcat. Check the address and network.</string>
+
     <!-- Share feature -->
     <string name="share_file_failed">Failed to share file</string>
     <string name="share_multiple_files">Share multiple files</string>

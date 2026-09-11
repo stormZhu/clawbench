@@ -101,6 +101,20 @@
     <string name="notif_status_separator">，</string>
     <string name="notif_listening">消息监听中</string>
     <string name="notif_service_stopping">后台服务即将停止</string>
+    <!-- Tailcat transport -->
+    <string name="notif_channel_tailcat">Tailcat 连接服务</string>
+    <string name="notif_channel_tailcat_desc">保持 Tailcat 加密传输连接</string>
+    <string name="notif_tailcat_connecting">正在通过 Tailcat 连接…</string>
+    <string name="notif_tailcat_connected">已通过 Tailcat 连接</string>
+    <string name="notif_tailcat_error">Tailcat 连接失败</string>
+    <string name="notif_tailcat_stopped">Tailcat 传输已停止</string>
+
+    <string name="tailcat_err_empty_address">请输入 Tailcat 地址</string>
+    <string name="tailcat_err_bad_address">Tailcat 地址格式不正确</string>
+    <string name="tailcat_err_bad_port">请输入有效的服务器端口（1-65535）</string>
+    <string name="tailcat_err_not_running">尚未保存 Tailcat 地址</string>
+    <string name="tailcat_err_start_failed">无法通过 Tailcat 连接，请检查地址与网络。</string>
+
     <!-- Share feature -->
     <string name="share_file_failed">分享文件失败</string>
     <string name="share_multiple_files">分享多个文件</string>

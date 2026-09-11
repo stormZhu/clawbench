@@ -29,7 +29,19 @@
       connection_failed: 'Connection failed: ',
       connect_error: 'Unable to connect. Check address and network.',
       wrong_password: 'Wrong password',
-      too_many_attempts: 'Too many attempts'
+      too_many_attempts: 'Too many attempts',
+      transport: 'Connection',
+      transport_http: 'Address',
+      transport_tailcat: 'Tailcat',
+      server_port: 'Server Port',
+      tailcat_address_label: 'Tailcat Address',
+      tailcat_entry: 'Tailcat',
+      tailcat_hint: 'Paste the address printed by the server',
+      enter_tailcat_address: 'Please enter a Tailcat address',
+      bad_port: 'Please enter a valid port (1-65535)',
+      disconnect: 'Disconnect',
+      delete_tailcat_title: 'Remove Tailcat',
+      delete_tailcat_msg: 'Remove the saved Tailcat address?'
     },
     zh: {
       slogan: '从掌心到桌面',
@@ -53,7 +65,19 @@
       connection_failed: '连接失败: ',
       connect_error: '无法连接到服务器，请检查地址和网络。',
       wrong_password: '密码错误',
-      too_many_attempts: '尝试次数过多'
+      too_many_attempts: '尝试次数过多',
+      transport: '连接方式',
+      transport_http: '普通地址',
+      transport_tailcat: 'Tailcat',
+      server_port: '服务器端口',
+      tailcat_address_label: 'Tailcat 地址',
+      tailcat_entry: 'Tailcat',
+      tailcat_hint: '粘贴服务器输出的地址',
+      enter_tailcat_address: '请输入 Tailcat 地址',
+      bad_port: '请输入有效的端口（1-65535）',
+      disconnect: '断 开',
+      delete_tailcat_title: '删除 Tailcat 地址',
+      delete_tailcat_msg: '删除已保存的 Tailcat 地址？'
     }
   };
   var LANG = 'en';
@@ -999,6 +1023,36 @@
     flex-shrink: 0;
   }
 
+  /* Tailcat mode: the address is a long opaque ConnBlob, so it takes the full width
+     on its own line and the port sits under it. */
+  .host-row.tailcat-mode {
+    flex-wrap: wrap;
+  }
+
+  .host-row.tailcat-mode #addHost {
+    flex-basis: 100%;
+  }
+
+  .host-row.tailcat-mode .colon {
+    display: none;
+  }
+
+  .host-row.tailcat-mode #addPort {
+    width: 100%;
+  }
+
+  /* Saved Tailcat entry shown above the saved-server list */
+  .tailcat-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tailcat-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
   /* Input fields — matches LoginView.vue input style */
   .input-with-icon {
     position: relative;
@@ -1270,6 +1324,44 @@
 
     <!-- Form -->
     <div class="form-card">
+      <!-- Saved Tailcat connection (shown when an address has been saved) -->
+      <div id="tailcatSection" class="tailcat-card" style="display:none;">
+        <div class="server-list-header" data-i18n="tailcat_entry">Tailcat</div>
+        <div class="server-item active" id="tailcatItem">
+          <div class="server-item-info">
+            <span class="server-indicator"></span>
+            <svg class="server-item-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6"/><path d="M5 12a7 7 0 0 1 14 0"/><path d="M2 12a10 10 0 0 1 20 0"/><path d="M12 16v6"/></svg>
+            <span class="server-item-url" id="tailcatItemLabel">Tailcat</span>
+          </div>
+          <button type="button" class="server-delete-btn" id="tailcatDeleteBtn" title="Delete">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="field-group" id="tailcatPasswordGroup">
+          <span class="field-label" data-i18n="password_label">登录密码</span>
+          <div class="input-with-icon">
+            <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <input type="password" id="tailcatPassword" data-i18n-placeholder="password_placeholder" placeholder="密码">
+          </div>
+        </div>
+        <button type="button" class="connect-btn" id="tailcatConnectBtn">
+          <span data-i18n="connect">连 接</span>
+        </button>
+        <button type="button" class="cancel-btn" id="tailcatStopBtn" data-i18n="disconnect">断 开</button>
+        <div class="error" id="tailcatErrorMsg">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="15" y1="9" x2="9" y2="15"/>
+            <line x1="9" y1="9" x2="15" y2="15"/>
+          </svg>
+          <span id="tailcatErrorText"></span>
+        </div>
+        <hr class="server-list-divider">
+      </div>
+
       <!-- Saved server list (shown when servers exist) -->
       <div id="serverListSection" style="display:none;">
         <div class="server-list-header" id="serverListHeader" data-i18n="saved_servers">已保存服务器</div>
@@ -1306,8 +1398,23 @@
 
       <!-- Add server form (hidden by default) -->
       <form id="addServerForm" onsubmit="return false;" style="display:none;">
-        <!-- Protocol -->
+        <!-- Connection mode: plain address vs Tailcat -->
         <div class="field-group">
+          <span class="field-label" data-i18n="transport">连接方式</span>
+          <div class="protocol-group">
+            <label>
+              <input type="radio" name="addTransport" value="http" checked>
+              <span data-i18n="transport_http">普通地址</span>
+            </label>
+            <label>
+              <input type="radio" name="addTransport" value="tailcat">
+              <span data-i18n="transport_tailcat">Tailcat</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Protocol (plain address mode only) -->
+        <div class="field-group" id="protocolGroup">
           <span class="field-label" data-i18n="protocol">协议</span>
           <div class="protocol-group">
             <label>
@@ -1321,14 +1428,15 @@
           </div>
         </div>
 
-        <!-- Host + Port -->
+        <!-- Host + Port (or Tailcat address + server port) -->
         <div class="field-group">
-          <span class="field-label" data-i18n="server_address">服务器地址</span>
-          <div class="host-row">
+          <span class="field-label" id="addHostLabel" data-i18n="server_address">服务器地址</span>
+          <div class="host-row" id="addHostRow">
             <input type="text" id="addHost" placeholder="192.168.1.100" autocorrect="off" autocapitalize="none" spellcheck="false">
             <span class="colon">:</span>
             <input type="number" id="addPort" value="20000" inputmode="numeric">
           </div>
+          <div class="tailcat-hint" id="tailcatHint" style="display:none;" data-i18n="tailcat_hint">粘贴服务器输出的地址</div>
         </div>
 
         <!-- Password -->
@@ -1404,6 +1512,10 @@
     // Load server list (single source of truth)
     loadServerList();
 
+    // Saved Tailcat connection, if any (read from native; the address itself is a
+    // bearer credential and is never handed to this page)
+    loadTailcatState();
+
     // Version
     try {
       var ver = ClawBenchNative.getAppVersion();
@@ -1451,12 +1563,34 @@
       var port = document.getElementById('addPort').value.trim();
       var password = document.getElementById('addPassword').value;
       var protocol = document.querySelector('input[name="addProtocol"]:checked').value;
+      var transport = document.querySelector('input[name="addTransport"]:checked').value;
 
       if (!host) {
-        showError('addErrorMsg', t('enter_address'));
+        showError('addErrorMsg',
+            transport === 'tailcat' ? t('enter_tailcat_address') : t('enter_address'));
         document.getElementById('addHost').focus();
         return;
       }
+
+      if (transport === 'tailcat') {
+        if (!port) port = '20000';
+        var serverPort = parseInt(port, 10);
+        if (!(serverPort >= 1 && serverPort <= 65535)) {
+          showError('addErrorMsg', t('bad_port'));
+          return;
+        }
+        setConnecting(true, true);
+        try {
+          // Native validates the address and only persists it once it is accepted,
+          // so a typo never becomes the remembered configuration.
+          ClawBenchNative.startTailcat(host, serverPort, password);
+        } catch(e) {
+          showError('addErrorMsg', t('connection_failed') + e.message);
+          setConnecting(false, true);
+        }
+        return;
+      }
+
       if (!port) {
         port = (protocol === 'https') ? '443' : '80';
       }
@@ -1484,7 +1618,147 @@
     document.getElementById('cancelAddBtn').addEventListener('click', function() {
       hideAddForm();
     });
+
+    // Event: switch between a plain address and a Tailcat address
+    document.querySelectorAll('input[name="addTransport"]').forEach(function(radio) {
+      radio.addEventListener('change', function() {
+        setTransportMode(document.querySelector('input[name="addTransport"]:checked').value);
+      });
+    });
+
+    // Event: connect / disconnect the saved Tailcat address
+    document.getElementById('tailcatConnectBtn').addEventListener('click', connectTailcat);
+    document.getElementById('tailcatStopBtn').addEventListener('click', function() {
+      try {
+        ClawBenchNative.stopTailcat();
+      } catch(e) {
+        showError('tailcatErrorMsg', t('connect_error'));
+      }
+    });
+
+    // Event: remove the saved Tailcat address altogether. stopPropagation keeps this
+    // from also being read as a click on the card's server row.
+    document.getElementById('tailcatDeleteBtn').addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      deleteTailcat();
+    });
   });
+
+  // =====================================================
+  // Tailcat
+  // =====================================================
+
+  var tailcatState = {};
+
+  function setTransportMode(mode) {
+    var isTailcat = (mode === 'tailcat');
+    document.getElementById('protocolGroup').style.display = isTailcat ? 'none' : 'block';
+    document.getElementById('addHostRow').classList.toggle('tailcat-mode', isTailcat);
+    document.getElementById('tailcatHint').style.display = isTailcat ? 'block' : 'none';
+
+    document.getElementById('addHostLabel').setAttribute(
+        'data-i18n', isTailcat ? 'tailcat_address_label' : 'server_address');
+    document.getElementById('addHost').setAttribute(
+        'placeholder', isTailcat ? 'tc…' : '192.168.1.100');
+    // Re-render the labels through the normal i18n pass so switching modes cannot
+    // leave stale text behind.
+    applyI18n();
+  }
+
+  function loadTailcatState() {
+    try {
+      tailcatState = JSON.parse(ClawBenchNative.getTailcatState() || '{}') || {};
+    } catch(e) {
+      tailcatState = {};
+    }
+    renderTailcatSection();
+  }
+
+  function renderTailcatSection() {
+    var section = document.getElementById('tailcatSection');
+    if (!section) return;
+
+    // Shown whenever an address is saved, not only while it is live: after a
+    // disconnect the address is still there, and this is the only way back to it
+    // without retyping the blob.
+    if (!tailcatState.hasAddress) {
+      section.style.display = 'none';
+      return;
+    }
+    section.style.display = 'flex';
+    document.getElementById('tailcatDeleteBtn').title = t('delete');
+
+    var label = t('tailcat_entry');
+    if (tailcatState.running && tailcatState.localPort) {
+      label += ' · 127.0.0.1:' + tailcatState.localPort;
+    } else if (tailcatState.serverPort) {
+      label += ' · :' + tailcatState.serverPort;
+    }
+    document.getElementById('tailcatItemLabel').textContent = label;
+    document.getElementById('tailcatItem').classList.toggle('active', !!tailcatState.running);
+
+    // The password field is only useful when nothing is saved yet.
+    var saved = '';
+    try { saved = ClawBenchNative.getPassword() || ''; } catch(e) {}
+    document.getElementById('tailcatPasswordGroup').style.display = saved ? 'none' : 'block';
+    if (!saved) document.getElementById('tailcatPassword').value = '';
+  }
+
+  function connectTailcat() {
+    if (connecting) return;
+    hideError('tailcatErrorMsg');
+
+    var password = '';
+    var group = document.getElementById('tailcatPasswordGroup');
+    if (group.style.display !== 'none') {
+      password = document.getElementById('tailcatPassword').value;
+    } else {
+      try { password = ClawBenchNative.getPassword() || ''; } catch(e) {}
+    }
+    if (!password) {
+      showError('tailcatErrorMsg', t('enter_password'));
+      document.getElementById('tailcatPassword').focus();
+      return;
+    }
+
+    setTailcatConnecting(true);
+    try {
+      // The address stays native-side; reconnect reuses it so the credential never
+      // crosses into the page.
+      ClawBenchNative.reconnectTailcat(password);
+    } catch(e) {
+      showError('tailcatErrorMsg', t('connection_failed') + e.message);
+      setTailcatConnecting(false);
+    }
+  }
+
+  // The saved-Tailcat card has its own button, so it needs its own busy state.
+  function setTailcatConnecting(loading) {
+    var btn = document.getElementById('tailcatConnectBtn');
+    if (!btn) return;
+    connecting = loading;
+    btn.disabled = loading;
+    btn.innerHTML = loading
+      ? '<div class="spinner"></div><span>' + t('authenticating') + '</span>'
+      : '<span>' + t('connect') + '</span>';
+  }
+
+  // Removing the address deletes a bearer credential, so it goes through the same
+  // confirm dialog as deleting a saved server. Native reloads the page afterwards,
+  // which re-runs loadTailcatState() and hides this card.
+  function deleteTailcat() {
+    customConfirm(t('delete_tailcat_msg'), {
+      title: t('delete_tailcat_title'),
+      confirmText: t('delete')
+    }).then(function(ok) {
+      if (!ok) return;
+      try {
+        ClawBenchNative.removeTailcatServer();
+      } catch(e) {
+        showError('tailcatErrorMsg', t('connect_error'));
+      }
+    });
+  }
 
   function loadServerList() {
     try {
@@ -1641,6 +1915,11 @@
     document.getElementById('serverListSection').style.display = 'none';
     document.getElementById('connectForm').style.display = 'none';
     document.getElementById('addServerBtn').style.display = 'none';
+    // Always open in plain-address mode: the form should never open in whatever
+    // mode the last attempt happened to leave behind.
+    var httpRadio = document.querySelector('input[name="addTransport"][value="http"]');
+    if (httpRadio) httpRadio.checked = true;
+    setTransportMode('http');
     document.getElementById('addServerForm').style.display = 'block';
   }
 
@@ -1669,7 +1948,12 @@
 
   function showError(id, msg) {
     var el = document.getElementById(id);
-    var textId = id === 'errorMsg' ? 'errorText' : 'addErrorText';
+    var textIds = {
+      errorMsg: 'errorText',
+      addErrorMsg: 'addErrorText',
+      tailcatErrorMsg: 'tailcatErrorText'
+    };
+    var textId = textIds[id] || 'errorText';
     document.getElementById(textId).textContent = msg;
     el.classList.add('visible');
   }
@@ -1702,6 +1986,18 @@
   function onConnectError(msg, code) {
     setConnecting(false);
     setConnecting(false, true);
+    setTailcatConnecting(false);
+
+    // A failed reconnect from the saved-Tailcat card belongs on that card. Native
+    // tags those errors rather than letting this page guess from localized text.
+    if (code === 'tailcat_reconnect') {
+      var tailcatSection = document.getElementById('tailcatSection');
+      if (tailcatSection && tailcatSection.style.display !== 'none') {
+        showError('tailcatErrorMsg', msg || t('connect_error'));
+        return;
+      }
+    }
+
     var addForm = document.getElementById('addServerForm');
     if (addForm.style.display !== 'none') {
       showError('addErrorMsg', msg || t('connect_error'));
@@ -1733,6 +2029,7 @@
   function onConnectSuccess() {
     setConnecting(false);
     setConnecting(false, true);
+    setTailcatConnecting(false);
   }
 </script>
 </body>

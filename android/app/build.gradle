@@ -34,9 +34,50 @@ def autoVersionCode() {
     }
 }
 
+/**
+ * The NDK AGP should use for native symbol stripping.
+ *
+ * AGP runs its strip task only when it can resolve an NDK; without one, gomobile's
+ * libgojni.so ships with its debug symbols and the APK ends up roughly twice as large.
+ *
+ * An explicit -PndkVersion wins, then an environment-provided NDK, then the newest one
+ * installed under the SDK. Returns null when none is found, so a machine without an NDK
+ * still builds — just larger.
+ */
+def resolveNdkVersion() {
+    if (project.hasProperty('ndkVersion')) return project.property('ndkVersion')
+
+    def fromEnv = System.getenv('ANDROID_NDK_HOME') ?: System.getenv('ANDROID_NDK_ROOT')
+    if (fromEnv) return new File(fromEnv).name
+
+    def sdkDir = null
+    def localProps = rootProject.file('local.properties')
+    if (localProps.exists()) {
+        def props = new Properties()
+        localProps.withInputStream { props.load(it) }
+        sdkDir = props.getProperty('sdk.dir')
+    }
+    if (!sdkDir) sdkDir = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+    if (!sdkDir) return null
+
+    def ndkRoot = new File(sdkDir, 'ndk')
+    if (!ndkRoot.isDirectory()) return null
+    def names = (ndkRoot.listFiles() ?: []).findAll { it.isDirectory() }.collect { it.name }
+    if (!names) return null
+    // Directories are named "<major>.<minor>.<build>", so the lexicographic maximum is
+    // the newest across the 2x/3x range. Install exactly one NDK (as CI does) and the
+    // choice is unambiguous anyway.
+    return names.max()
+}
+
 android {
     namespace 'com.clawbench.app'
     compileSdk 36
+
+    def resolvedNdk = resolveNdkVersion()
+    if (resolvedNdk) {
+        ndkVersion resolvedNdk
+    }
 
     defaultConfig {
         applicationId "com.clawbench.app"
@@ -45,6 +86,13 @@ android {
         versionCode autoVersionCode()
         versionName autoVersionName()
 
+        ndk {
+            // tailcatbridge is produced by gomobile for android/arm64 only.
+            // Pinning the ABI keeps the APK honest: without this the other ABIs
+            // would still advertise support and then crash with an
+            // UnsatisfiedLinkError on the first Tailcat dial.
+            abiFilters 'arm64-v8a'
+        }
     }
 
     signingConfigs {
@@ -113,6 +161,11 @@ dependencies {
 
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'androidx.work:work-runtime:2.9.0'
+
+    // gomobile-generated binding for the Tailcat transport (jni/arm64-v8a only).
+    // The AAR carries its own consumer proguard rules (keeps go.** and
+    // tailcatbridge.**), so the release build needs nothing extra here.
+    implementation fileTree(dir: 'libs', include: ['*.aar'])
 
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.11.1'

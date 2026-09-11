@@ -61,6 +61,17 @@
             android:stopWithTask="false"
             android:exported="false" />
 
+        <!-- Tailcat transport. Kept separate from BackgroundService so only one of the
+             two can ever drive the WebView. stopWithTask="true" differs from the SSH
+             service on purpose: the loopback listener exists solely to serve the
+             WebView, so once the task is gone there is nothing left to serve and the
+             foreground notification should not linger. -->
+        <service
+            android:name=".TailcatService"
+            android:foregroundServiceType="dataSync|remoteMessaging"
+            android:stopWithTask="true"
+            android:exported="false" />
+
         <!-- Sandbox browser for testing forwarded ports — runs in separate process for Cookie/Storage isolation.
              singleTask ensures only one instance exists; re-opening always triggers onNewIntent
              instead of creating a new Activity (which would reload the WebView). -->

@@ -154,6 +154,27 @@ public class MainActivity extends AppCompatActivity {
     // page can classify auth errors without matching localized message text.
     private static final String ERROR_CODE_PASSWORD = "password";
     private static final String ERROR_CODE_RATE_LIMIT = "rate_limit";
+    /** Transport-level failure (Tailcat could not come up / is not usable). */
+    private static final String ERROR_CODE_TRANSPORT = "transport";
+    /**
+     * A failed reconnect from the saved-Tailcat card. Kept distinct from
+     * {@link #ERROR_CODE_TRANSPORT} because the login page reloads before the error is
+     * delivered, so it cannot remember which surface started the attempt — the code is
+     * the only thing that survives.
+     */
+    private static final String ERROR_CODE_TAILCAT_RECONNECT = "tailcat_reconnect";
+
+    /**
+     * How long to wait for the Tailcat loopback listener after asking the service to
+     * start. Opening the listener is a local {@code net.Listen}, so this is generous;
+     * the tailnet handshake itself is lazy and is exercised by the /login POST that
+     * follows, not by this wait.
+     */
+    static final long TAILCAT_START_TIMEOUT_MS = 8000L;
+    /** Polling interval while waiting for the listener. */
+    static final long TAILCAT_POLL_INTERVAL_MS = 50L;
+    /** The loopback host a Tailcat-backed WebView is allowed to load. */
+    static final String TAILCAT_LOOPBACK_PREFIX = "http://127.0.0.1:";
 
     // Set to true when the user has confirmed a self-signed SSL certificate at the OkHttp level.
     // When true, onReceivedSslError will auto-accept SSL errors for the current server,
@@ -338,6 +359,18 @@ public class MainActivity extends AppCompatActivity {
             savedPassword = null;
         }
         String savedUrl = prefs.getString(KEY_SERVER_URL, null);
+
+        // A Tailcat-backed install loads the loopback URL rather than the URL the user
+        // typed — the tunnel is what makes the loopback URL reachable, and the typed
+        // address is not a URL at all. When the persisted URL is missing or not
+        // loopback this returns null and the normal HTTP path runs instead.
+        String tailcatUrl = tailcatStartupUrl(
+                prefs.getString(TailcatService.KEY_SERVER_TRANSPORT, TailcatService.TRANSPORT_HTTP),
+                prefs.getString(TailcatService.KEY_LOCAL_WEBVIEW_URL, null));
+        if (tailcatUrl != null) {
+            savedUrl = tailcatUrl;
+        }
+
         if (savedUrl != null) {
             // Auto-reconnect: use pre-authentication to verify server is reachable
             // before loading the WebView. This prevents Chrome's built-in error page.
@@ -1256,6 +1289,226 @@ public class MainActivity extends AppCompatActivity {
             webView.removeCallbacks(connectionTimeoutRunnable);
             connectionTimeoutRunnable = null;
         }
+    }
+
+    // =====================================================
+    // Tailcat transport
+    // =====================================================
+
+    /**
+     * The loopback URL a Tailcat-backed install should load, or null when the saved
+     * configuration is not a usable Tailcat one.
+     *
+     * <p>Both guards are deliberate: the transport has to actually be Tailcat, and the
+     * stored URL has to be loopback with a real port. A {@code local_webview_url} left
+     * behind by an interrupted session must never aim the WebView anywhere else.
+     */
+    static String tailcatStartupUrl(String transport, String localWebviewUrl) {
+        if (!TailcatService.TRANSPORT_TAILCAT.equals(transport)) {
+            return null;
+        }
+        if (localWebviewUrl == null || !localWebviewUrl.startsWith(TAILCAT_LOOPBACK_PREFIX)) {
+            return null;
+        }
+        String hostPort = localWebviewUrl.substring("http://".length());
+        return TailcatManager.portOf(hostPort) > 0 ? localWebviewUrl : null;
+    }
+
+    /**
+     * Brings the Tailcat transport up, then runs the ordinary /login flow against the
+     * loopback URL. Called from the login page's Tailcat mode.
+     *
+     * <p>The address is validated here first so the user gets a specific message
+     * without waiting on the service, and so an unusable address is rejected before
+     * anything is persisted.
+     */
+    void startTailcat(String address, int serverPort, String password) {
+        String addressError = TailcatManager.validateAddress(address);
+        if (!TailcatManager.ERR_NONE.equals(addressError)) {
+            showLoginPage(tailcatErrorText(addressError), ERROR_CODE_TRANSPORT);
+            return;
+        }
+        if (!TailcatManager.isValidPort(serverPort)) {
+            showLoginPage(tailcatErrorText(TailcatManager.ERR_BAD_PORT), ERROR_CODE_TRANSPORT);
+            return;
+        }
+
+        final String trimmed = address.trim();
+        final boolean rotating = TailcatService.TRANSPORT_TAILCAT.equals(
+                prefs.getString(TailcatService.KEY_SERVER_TRANSPORT, ""));
+
+        // Persist before starting: if the process dies mid-start the address is still
+        // recoverable. The plain HTTP URL is captured only on the first switch, so a
+        // later rotation cannot overwrite it with the loopback URL it replaced.
+        SharedPreferences.Editor editor = prefs.edit()
+                .putString(TailcatService.KEY_SERVER_TRANSPORT, TailcatService.TRANSPORT_TAILCAT)
+                .putString(TailcatService.KEY_TAILCAT_ADDRESS, trimmed)
+                .putInt(TailcatService.KEY_TAILCAT_SERVER_PORT, serverPort);
+        if (!rotating) {
+            String previous = prefs.getString(KEY_SERVER_URL, "");
+            if (previous != null && !previous.isEmpty()
+                    && !previous.startsWith(TAILCAT_LOOPBACK_PREFIX)) {
+                editor.putString(TailcatService.KEY_SERVER_INPUT_URL, previous);
+            }
+        }
+        editor.apply();
+
+        if (password != null && !password.isEmpty()) {
+            BackgroundService.setPassword(this, password);
+        }
+
+        webViewConnected = false;
+        loadErrorPending = false;
+        sslCertTrustedByUser = false;
+        webView.setVisibility(View.GONE);
+        showSplash();
+
+        final String userPassword = password;
+        new Thread(() -> {
+            if (rotating) {
+                TailcatService.rotate(this, trimmed, serverPort);
+            } else {
+                TailcatService.start(this, trimmed, serverPort);
+            }
+            String local = awaitTailcatLocalAddress(
+                    TailcatService.manager(), TAILCAT_START_TIMEOUT_MS);
+            if (local == null) {
+                String code = TailcatService.manager().getErrorType();
+                runOnUiThread(() -> showLoginPage(tailcatErrorText(code), ERROR_CODE_TRANSPORT));
+                return;
+            }
+            runOnUiThread(() -> connectToServer("http://" + local, userPassword));
+        }, "tailcat-start").start();
+    }
+
+    /**
+     * Rebuilds the transport from the saved address and reloads the loopback URL.
+     * Used after a network change or when the user asks to retry.
+     *
+     * @param password the password to authenticate with; empty to reuse the saved one
+     */
+    void reconnectTailcat(String password) {
+        String address = TailcatService.restoredAddress(this);
+        if (address.isEmpty()) {
+            showLoginPage(tailcatErrorText(TailcatManager.ERR_NOT_RUNNING),
+                    ERROR_CODE_TAILCAT_RECONNECT);
+            return;
+        }
+        final String effectivePassword = (password != null && !password.isEmpty())
+                ? password
+                : prefs.getString(KEY_SSH_PASSWORD, "");
+        webViewConnected = false;
+        loadErrorPending = false;
+        sslCertTrustedByUser = false;
+        webView.setVisibility(View.GONE);
+        showSplash();
+
+        new Thread(() -> {
+            TailcatService.reconnect(this);
+            String local = awaitTailcatLocalAddress(
+                    TailcatService.manager(), TAILCAT_START_TIMEOUT_MS);
+            if (local == null) {
+                String code = TailcatService.manager().getErrorType();
+                runOnUiThread(() -> showLoginPage(tailcatErrorText(code),
+                        ERROR_CODE_TAILCAT_RECONNECT));
+                return;
+            }
+            runOnUiThread(() -> connectToServer("http://" + local, effectivePassword));
+        }, "tailcat-reconnect").start();
+    }
+
+    /**
+     * Tears the transport down and returns to the login page.
+     *
+     * <p>The loopback URL is dropped and the previous plain-HTTP URL restored, so the
+     * WebView can never be sent to a port the service has just closed.
+     */
+    void stopTailcat() {
+        TailcatService.stop(this);
+        SharedPreferences.Editor editor = prefs.edit()
+                .remove(TailcatService.KEY_LOCAL_WEBVIEW_URL)
+                .putString(TailcatService.KEY_SERVER_TRANSPORT, TailcatService.TRANSPORT_HTTP);
+        String fallback = prefs.getString(TailcatService.KEY_SERVER_INPUT_URL, "");
+        if (fallback != null && !fallback.isEmpty()) {
+            editor.putString(KEY_SERVER_URL, fallback);
+        }
+        editor.apply();
+        showLoginPage(null);
+    }
+
+    /**
+     * Removes the saved Tailcat server: disconnects, makes the transport forget the
+     * address, and wipes every Tailcat preference.
+     *
+     * <p>Distinct from {@link #stopTailcat()}, which only disconnects. A Tailcat address
+     * is a bearer credential, so removing it must leave nothing behind — neither in
+     * preferences nor in {@link TailcatManager} — or a later reconnect could revive a
+     * credential the user asked to delete.
+     *
+     * <p>The plain-HTTP fallback is restored exactly as in {@link #stopTailcat()}, so
+     * the login page still has somewhere to connect after the card disappears.
+     */
+    void removeTailcatServer() {
+        TailcatService.forget(this);
+        SharedPreferences.Editor editor = prefs.edit()
+                .remove(TailcatService.KEY_TAILCAT_ADDRESS)
+                .remove(TailcatService.KEY_TAILCAT_SERVER_PORT)
+                .remove(TailcatService.KEY_TAILCAT_LOCAL_PORT)
+                .remove(TailcatService.KEY_LOCAL_WEBVIEW_URL)
+                .putString(TailcatService.KEY_SERVER_TRANSPORT, TailcatService.TRANSPORT_HTTP);
+        String fallback = prefs.getString(TailcatService.KEY_SERVER_INPUT_URL, "");
+        if (fallback != null && !fallback.isEmpty()) {
+            editor.putString(KEY_SERVER_URL, fallback);
+        }
+        editor.apply();
+        showLoginPage(null);
+    }
+
+    /**
+     * Waits for the transport to report a loopback address.
+     *
+     * <p>Polling rather than a callback keeps the service free of any reference to an
+     * Activity: the manager is process-wide, so the state is already observable here.
+     *
+     * @return the {@code "host:port"} address, or null on error or timeout
+     */
+    static String awaitTailcatLocalAddress(TailcatManager manager, long timeoutMs) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (true) {
+            if (manager.isRunning()) {
+                return manager.getLocalAddress();
+            }
+            if (TailcatManager.STATE_ERROR.equals(manager.getState())) {
+                return null;
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                return null;
+            }
+            try {
+                Thread.sleep(TAILCAT_POLL_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+    }
+
+    /** Localized text for a {@code TailcatManager.ERR_*} code. */
+    private String tailcatErrorText(String errorType) {
+        if (TailcatManager.ERR_EMPTY_ADDRESS.equals(errorType)) {
+            return userLangString(R.string.tailcat_err_empty_address);
+        }
+        if (TailcatManager.ERR_BAD_PREFIX.equals(errorType)
+                || TailcatManager.ERR_BAD_ENCODING.equals(errorType)) {
+            return userLangString(R.string.tailcat_err_bad_address);
+        }
+        if (TailcatManager.ERR_BAD_PORT.equals(errorType)) {
+            return userLangString(R.string.tailcat_err_bad_port);
+        }
+        if (TailcatManager.ERR_NOT_RUNNING.equals(errorType)) {
+            return userLangString(R.string.tailcat_err_not_running);
+        }
+        return userLangString(R.string.tailcat_err_start_failed);
     }
 
     /**
@@ -2881,6 +3134,78 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 AppLog.e(TAG, "reconnectTunnelAsync: failed", e);
             }
+        }
+
+        // =====================================================
+        // Tailcat transport
+        // =====================================================
+
+        /**
+         * The Tailcat transport state as a JSON object.
+         *
+         * <p>Synchronous on purpose: it only reads in-memory state, so it is safe on
+         * the JavaBridge thread. The address itself is never included — it is a bearer
+         * credential.
+         */
+        @JavascriptInterface
+        public String getTailcatState() {
+            TailcatManager m = TailcatService.manager();
+            try {
+                org.json.JSONObject state = new org.json.JSONObject();
+                state.put("transport", activity.prefs.getString(
+                        TailcatService.KEY_SERVER_TRANSPORT, TailcatService.TRANSPORT_HTTP));
+                state.put("state", m.getState());
+                state.put("running", m.isRunning());
+                state.put("errorType", m.getErrorType());
+                state.put("error", m.getError());
+                state.put("serverPort", m.getServerPort());
+                state.put("localPort", TailcatManager.portOf(m.getLocalAddress()));
+                state.put("hasAddress", !TailcatService.restoredAddress(activity).isEmpty());
+                return state.toString();
+            } catch (org.json.JSONException e) {
+                AppLog.w(TAG, "getTailcatState: " + e.getMessage());
+                return "{}";
+            }
+        }
+
+        /**
+         * Connect through Tailcat, then run the normal /login flow.
+         *
+         * <p>Asynchronous: the WebView is only pointed at the loopback URL once the
+         * listener exists, so no error page can flash. Failure comes back through the
+         * login page's {@code onConnectError(msg, code)}.
+         */
+        @JavascriptInterface
+        public void startTailcat(String address, int serverPort, String password) {
+            activity.runOnUiThread(() -> activity.startTailcat(address, serverPort, password));
+        }
+
+        /**
+         * Rebuild the Tailcat tunnel, reusing the saved address and loopback port.
+         *
+         * @param password password to authenticate with; empty reuses the saved one.
+         *                 The address is deliberately not a parameter: it stays native
+         *                 side so the bearer credential never reaches the page.
+         */
+        @JavascriptInterface
+        public void reconnectTailcat(String password) {
+            activity.runOnUiThread(() -> activity.reconnectTailcat(password));
+        }
+
+        /** Drop the Tailcat tunnel and return to the login page. */
+        @JavascriptInterface
+        public void stopTailcat() {
+            activity.runOnUiThread(activity::stopTailcat);
+        }
+
+        /**
+         * Remove the saved Tailcat address entirely. Unlike {@link #stopTailcat()} this
+         * also wipes the bearer credential, so the user can delete a server they no
+         * longer trust. No address is passed in: it only ever lives natively.
+         */
+        @JavascriptInterface
+        public void removeTailcatServer() {
+            activity.runOnUiThread(activity::removeTailcatServer);
         }
 
         /**

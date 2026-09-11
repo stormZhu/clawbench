@@ -139,7 +139,24 @@ fi
 if [ -n "$BUILD_ANDROID" ]; then
     echo "[2/5] Building Android APK..."
     if [ -d "android" ] && [ -f "android/gradlew" ]; then
-        (cd android && JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew assembleRelease \
+        # 2a. gomobile binding for the Tailcat transport. The AAR is a generated
+        # binary and is not committed, so it is rebuilt here whenever
+        # mobile/tailcatbridge changed. The script no-ops when the AAR is current.
+        if [ -x "$SCRIPT_DIR/scripts/build-tailcat-aar.sh" ]; then
+            "$SCRIPT_DIR/scripts/build-tailcat-aar.sh" \
+                || { echo "ERROR: Tailcat AAR build failed" >&2; exit 1; }
+        else
+            echo "  Warning: scripts/build-tailcat-aar.sh missing; assuming android/app/libs/ is populated"
+        fi
+
+        # Only fall back to the distro JDK path when JAVA_HOME is unset and the path
+        # exists: pointing Gradle at a non-existent directory makes it fail before it
+        # starts, and on macOS/CI the ambient JAVA_HOME is already correct.
+        if [ -z "${JAVA_HOME:-}" ] && [ -d /usr/lib/jvm/java-17-openjdk-amd64 ]; then
+            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+        fi
+
+        (cd android && ./gradlew assembleRelease \
             -PversionCode=$VERSION_CODE -PversionName="$FULL_VERSION") || { echo "ERROR: Android APK build failed" >&2; exit 1; }
         echo "  APK: android/app/build/outputs/apk/release/clawbench-android.apk"
         if [ -f android/app/build/outputs/apk/release/clawbench-android.apk ]; then
